@@ -1,0 +1,6 @@
+services:
+  - type: worker
+    name: cantarellabots-telegram-bot
+    runtime: python
+    buildCommand: ""
+    startCommand: "python main.py"
