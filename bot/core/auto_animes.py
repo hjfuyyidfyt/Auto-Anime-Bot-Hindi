@@ -12,7 +12,7 @@ from config import Var
 from bot.core.bot_instance import bot, bot_loop, ani_cache, ffQueue, ffLock, ff_queued
 from .tordownload import TorDownloader
 from .database import db
-from .func_utils import getfeed, encode, editMessage, sendMessage, convertBytes
+from .func_utils import getfeed, encode, editMessage, sendMessage, convertBytes, get_all_feed_entries
 from .text_utils import TextEditor
 from .ffencoder import FFEncoder
 from .tguploader import TgUploader
@@ -180,6 +180,57 @@ async def get_animes(name, torrent, force=False):
         if not ani_id or not ep_no:
             await rep.report(f"Invalid anime data for {name}: ID or episode number missing", "error", log=True)
             return
+
+        # Auto-Sync Entire Series logic
+        if 'synced_animes' not in ani_cache:
+            ani_cache['synced_animes'] = set()
+            
+        if ani_id not in ani_cache['synced_animes'] and not force:
+            ani_cache['synced_animes'].add(ani_id)
+            anime_title = ani_info.adata.get('title', {}).get('english') or ani_info.adata.get('title', {}).get('romaji')
+            if anime_title:
+                import urllib.parse
+                await rep.report(f"Auto-Sync triggered for anime: {anime_title}", "info", log=True)
+                query = f"{anime_title} Hindi"
+                rss_url = f"https://nyaa.si/?page=rss&q={urllib.parse.quote(query)}&c=1_2&f=0"
+                entries = await get_all_feed_entries(rss_url)
+                
+                found_episodes = []
+                parent_title = ani_info.pdata.get("anime_title")
+                for entry in entries:
+                    if "hindi" not in entry.title.lower():
+                        continue
+                    entry_info = TextEditor(entry.title)
+                    entry_title = entry_info.pdata.get("anime_title")
+                    
+                    # Verify title matches to avoid API call
+                    if entry_title and parent_title and entry_title.lower() == parent_title.lower():
+                        try:
+                            ep_val = float(entry_info.pdata.get("episode_number"))
+                            found_episodes.append((ep_val, entry.title, entry.link))
+                        except (TypeError, ValueError):
+                            continue
+                
+                # Sort episodes chronologically
+                found_episodes.sort(key=lambda x: x[0])
+                
+                if found_episodes:
+                    await rep.report(f"Auto-Sync found {len(found_episodes)} episodes for '{anime_title}'. Syncing...", "info", log=True)
+                    ani_data = await db.get_anime(ani_id)
+                    for ep_val, ep_title, ep_link in found_episodes:
+                        ep_no_str = str(int(ep_val)) if ep_val.is_integer() else str(ep_val)
+                        qual_data = ani_data.get(ep_no_str) if ani_data else None
+                        
+                        if not ani_data or not qual_data or not all(qual_data.get(qual) for qual in Var.QUALS):
+                            await rep.report(f"Sync Processing: {ep_title}", "info", log=True)
+                            try:
+                                await get_animes(ep_title, ep_link, force=True)
+                            except Exception as sync_err:
+                                await rep.report(f"Failed to sync {ep_title}: {sync_err}", "error", log=True)
+                    
+                    await rep.report(f"Auto-Sync complete for anime: {anime_title}!", "info", log=True)
+                    return
+
         if ani_id not in ani_cache['ongoing']:
             ani_cache['ongoing'].add(ani_id)
         elif not force:
@@ -237,7 +288,7 @@ async def get_animes(name, torrent, force=False):
                     await rep.report(f"Failed to send to specific channel {specific_channel_id} for {name}: {str(e)}", "error", log=True)
             
             await asleep(1.5)
-            stat_msg = await sendMessage(Var.MAIN_CHANNEL, f"‣ <b>Aɴɪᴍᴇ Nᴀᴍᴇ :</b>\n<blockquote><b><i>{name}</i></b></blockquote>\n\n<blockquote><i>Dᴏᴡɴʟᴏᴀᴅɪɴɢ....</i></blockquote>")
+            stat_msg = await sendMessage(Var.FILE_STORE, f"‣ <b>Aɴɪᴍᴇ Nᴀᴍᴇ :</b>\n<blockquote><b><i>{name}</i></b></blockquote>\n\n<blockquote><i>Dᴏᴡɴʟᴏᴀᴅɪɴɢ....</i></blockquote>")
             dl = await TorDownloader("./downloads").download(torrent, name)
             if not dl or not ospath.exists(dl):
                 await rep.report(f"File Download Incomplete, Try Again", "error", log=True)

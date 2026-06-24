@@ -81,6 +81,41 @@ async def getfeed(link, index=0, max_retries=3, timeout=10):
             LOGS.error(format_exc())
             return None
 
+async def get_all_feed_entries(link, max_retries=3, timeout=10):
+    retry_delay = 2
+    for attempt in range(max_retries):
+        try:
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                'Accept': 'application/rss+xml, application/xml, text/xml'
+            }
+            feed = await wait_for(
+                sync_to_async(
+                    lambda: feedparse(link, 
+                                    agent=headers['User-Agent'],
+                                    request_headers=headers)
+                ),
+                timeout=timeout
+            )
+            if feed and feed.entries:
+                return feed.entries
+            return []
+        except TimeoutError:
+            LOGS.error(f"Timeout after {timeout}s for {link}")
+            if attempt < max_retries - 1:
+                await asleep(retry_delay)
+                retry_delay *= 2
+                continue
+            return []
+        except Exception as e:
+            LOGS.error(f"Attempt {attempt + 1} failed for {link}: {str(e)}")
+            if attempt < max_retries - 1:
+                await asleep(retry_delay)
+                retry_delay *= 2
+                continue
+            LOGS.error(format_exc())
+            return []
+
 @handle_logs
 async def aio_urldownload(link):
     async with ClientSession() as sess:

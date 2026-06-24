@@ -6,7 +6,7 @@ from aiofiles import open as aiopen
 from aiofiles.os import remove as aioremove, rename as aiorename
 from shlex import split as ssplit
 from asyncio import sleep as asleep, gather, create_subprocess_shell, create_task
-from asyncio.subprocess import PIPE
+from asyncio.subprocess import PIPE, DEVNULL
 
 from bot.core.bot_instance import bot_loop, ffpids_cache
 from .func_utils import mediainfo, convertBytes, convertTime, sendMessage, editMessage
@@ -81,10 +81,17 @@ class FFEncoder:
         dl_npath, out_npath = ospath.join("encode", "ffanimeadvin.mkv"), ospath.join("encode", "ffanimeadvout.mkv")
         await aiorename(self.dl_path, dl_npath)
         
-        ffcode = ffargs[self.__qual].format(dl_npath, self.__prog_file, out_npath)
+        err_file = ospath.join("encode", "ffmpeg_err.txt")
+        if ospath.exists(err_file):
+            try:
+                await aioremove(err_file)
+            except:
+                pass
+        
+        ffcode = ffargs[self.__qual].format(dl_npath, self.__prog_file, out_npath) + f" 2> '{err_file}'"
         
         LOGS.info(f'FFCode: {ffcode}')
-        self.__proc = await create_subprocess_shell(ffcode, stdout=PIPE, stderr=PIPE)
+        self.__proc = await create_subprocess_shell(ffcode, stdout=DEVNULL)
         proc_pid = self.__proc.pid
         ffpids_cache.append(proc_pid)
         _, return_code = await gather(create_task(self.progress()), self.__proc.wait())
@@ -100,7 +107,13 @@ class FFEncoder:
                 await aiorename(out_npath, self.out_path)
             return self.out_path
         else:
-            err_text = (await self.__proc.stderr.read()).decode().strip()
+            err_text = ""
+            if ospath.exists(err_file):
+                try:
+                    async with aiopen(err_file, 'r') as ef:
+                        err_text = await ef.read()
+                except Exception as e:
+                    err_text = f"Could not read error file: {e}"
             await rep.report(err_text, "error")
             raise Exception(f"FFmpeg failed: {err_text}")
             

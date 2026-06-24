@@ -29,7 +29,7 @@ class Var:
 
     RSS_ITEMS = getenv("RSS_ITEMS", "").split()
     SEND_SCHEDULE = getenv("SEND_SCHEDULE", "True").lower() == "true"
-    BRAND_UNAME = getenv("BRAND_UNAME", "@cantarellabots")
+    BRAND_UNAME = getenv("BRAND_UNAME", "@Z5Tech_BD")
 
     FFCODE_1080 = getenv("FFCODE_1080")
     FFCODE_720 = getenv("FFCODE_720")
