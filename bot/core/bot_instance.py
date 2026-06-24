@@ -8,11 +8,13 @@ from os import path as ospath, mkdir, system
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyrogram import Client
 from pyrogram.enums import ParseMode
-from uvloop import install
+try:
+    from uvloop import install
+    install()
+except ImportError:
+    pass
 from datetime import datetime
 from config import Var, LOGS
-
-install()
 
 basicConfig(
     format="[%(asctime)s] [%(name)s | %(levelname)s] - %(message)s [%(filename)s:%(lineno)d]",
