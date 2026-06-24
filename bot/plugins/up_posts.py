@@ -16,10 +16,6 @@ from pyrogram.errors import FloodWait, MessageNotModified
 from pyrogram.filters import command, private, user
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
 
-# python-telegram-bot imports (keep Update & CallbackContext)
-from telegram import Update, ParseMode
-from telegram.ext import CallbackContext, CommandHandler
-
 # Bot internal imports
 from config import Var
 from bot.core.bot_instance import bot, bot_loop, ani_cache, ffQueue
