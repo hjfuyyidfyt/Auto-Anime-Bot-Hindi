@@ -30,9 +30,9 @@ from bot.core.func_utils import (
 LOGGER = logging.getLogger(__name__)
 
 # MongoDB setup
-DB_URI = ""
+DB_URI = Var.DB_URI
 mongo_client = AsyncIOMotorClient(DB_URI)
-db = mongo_client['AutoAniOngoing']
+db = mongo_client[Var.DB_NAME]
 
 
 def get_readable_time(seconds: int) -> str:
