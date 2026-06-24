@@ -172,6 +172,8 @@ async def fetch_animes():
 
 async def get_animes(name, torrent, force=False):
     try:
+        if "hindi" not in name.lower():
+            return
         ani_info = TextEditor(name)
         await ani_info.load_anilist()
         ani_id, ep_no = ani_info.adata.get('id'), ani_info.pdata.get("episode_number")

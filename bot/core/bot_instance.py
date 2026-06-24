@@ -34,7 +34,7 @@ ani_cache = {
 # Add the key **after** dictionary creation
 ani_cache['custom_rss'] = set()
 ffpids_cache = []
-ffLock = Semaphore(3)
+ffLock = Semaphore(1)
 ffQueue = Queue()
 ff_queued = dict()
 
