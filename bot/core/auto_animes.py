@@ -371,6 +371,21 @@ async def get_animes(name, torrent, force=False):
                     await editMessage(main_post_msg, main_post_msg.caption.html if main_post_msg.caption else "", InlineKeyboardMarkup(main_btns))
                 
                 await db.save_anime(ani_id, ep_no, qual, post_id, file_msg_id=msg_id)
+                
+                # Log to LOG_CHANNEL
+                try:
+                    source_str = "Manual Command / Sync" if force else "Auto-Sync Feed"
+                    log_text = f"""<b>📥 New Video Uploaded</b>
+<b>• Anime:</b> <code>{name}</code>
+<b>• Episode:</b> <code>{ep_no}</code>
+<b>• Quality:</b> <code>{qual}</code>
+<b>• Source:</b> <code>{source_str}</code>
+<b>• Torrent Link:</b> <a href="{torrent}">Click Here</a>
+<b>• File Message ID:</b> <code>{msg_id}</code>"""
+                    await bot.send_message(chat_id=Var.LOG_CHANNEL, text=log_text, disable_web_page_preview=True)
+                except Exception as log_err:
+                    from config import LOGS
+                    LOGS.error(f"Failed to send log message to LOG_CHANNEL: {log_err}")
             
             # Remove final main channel update since buttons are updated incrementally
             sticker_id = await db.get_sticker()

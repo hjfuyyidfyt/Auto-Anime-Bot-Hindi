@@ -69,3 +69,82 @@ async def upload_nyaa_callback(client: Client, callback: CallbackQuery):
     # Trigger the download/encode/upload process
     # force=True ensures we process it even if it was done before
     bot_loop.create_task(get_animes(title, link, force=True))
+
+@bot.on_message(filters.command("sync") & filters.private & admin)
+async def manual_sync_anime(client: Client, message: Message):
+    if len(message.command) < 2:
+        return await message.reply("<b>Usage:</b> <code>/sync Anime Name</code>")
+    
+    anime_title = " ".join(message.command[1:])
+    msg = await message.reply(f"<i>Manual Auto-Sync triggered for: {anime_title}...</i>")
+    
+    # Run the sync logic in the background
+    asyncio.create_task(run_manual_sync(anime_title, msg))
+
+async def run_manual_sync(anime_title, msg):
+    from bot.core.func_utils import get_all_feed_entries
+    from bot.core.database import db
+    from bot.core.text_utils import TextEditor
+    from config import Var
+    
+    # 1. Search Nyaa.si for [Anime Name] Hindi
+    query = f"{anime_title} Hindi"
+    encoded_query = urllib.parse.quote(query)
+    rss_url = f"https://nyaa.si/?page=rss&q={encoded_query}&c=1_2&f=0"
+    
+    entries = await get_all_feed_entries(rss_url)
+    if not entries:
+        await msg.edit(f"❌ No Hindi episodes found on Nyaa.si for: <code>{anime_title}</code>")
+        return
+        
+    # Filter and match titles to ensure they match the requested anime title
+    found_episodes = []
+    for entry in entries:
+        if "hindi" not in entry.title.lower():
+            continue
+        entry_info = TextEditor(entry.title)
+        entry_title = entry_info.pdata.get("anime_title")
+        
+        # Simple match check
+        if entry_title and (anime_title.lower() in entry_title.lower() or entry_title.lower() in anime_title.lower()):
+            try:
+                ep_val = float(entry_info.pdata.get("episode_number"))
+                ep_str = entry_info.pdata.get("episode_number")
+                found_episodes.append((ep_val, ep_str, entry.title, entry.link, entry_info))
+            except (TypeError, ValueError):
+                continue
+                
+    if not found_episodes:
+        await msg.edit(f"❌ No matching episodes found for: <code>{anime_title}</code>")
+        return
+        
+    found_episodes.sort(key=lambda x: x[0])
+    
+    await msg.edit(f"✅ Found {len(found_episodes)} episodes for <code>{anime_title}</code>. Starting database check...")
+    
+    # Load first anime ID to fetch database
+    first_info = found_episodes[0][4]
+    await first_info.load_anilist()
+    ani_id = first_info.adata.get('id')
+    
+    if not ani_id:
+        await msg.edit(f"❌ Failed to fetch AniList ID for: <code>{anime_title}</code>")
+        return
+        
+    ani_data = await db.get_anime(ani_id)
+    
+    synced_count = 0
+    skipped_count = 0
+    
+    for ep_val, ep_str, ep_title, ep_link, _ in found_episodes:
+        qual_data = ani_data.get(ep_str) if ani_data else None
+        
+        # Check if all qualities are uploaded
+        if not ani_data or not qual_data or not all(qual_data.get(qual) for qual in Var.QUALS):
+            synced_count += 1
+            # Trigger download
+            asyncio.create_task(get_animes(ep_title, ep_link, force=True))
+        else:
+            skipped_count += 1
+            
+    await msg.edit(f"📊 <b>Sync report for {anime_title}:</b>\n- Synced/Queued: {synced_count} episode(s)\n- Skipped (already in DB): {skipped_count} episode(s)")
