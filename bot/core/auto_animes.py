@@ -207,7 +207,8 @@ async def get_animes(name, torrent, force=False):
                     if entry_title and parent_title and entry_title.lower() == parent_title.lower():
                         try:
                             ep_val = float(entry_info.pdata.get("episode_number"))
-                            found_episodes.append((ep_val, entry.title, entry.link))
+                            ep_str = entry_info.pdata.get("episode_number")
+                            found_episodes.append((ep_val, ep_str, entry.title, entry.link))
                         except (TypeError, ValueError):
                             continue
                 
@@ -217,9 +218,8 @@ async def get_animes(name, torrent, force=False):
                 if found_episodes:
                     await rep.report(f"Auto-Sync found {len(found_episodes)} episodes for '{anime_title}'. Syncing...", "info", log=True)
                     ani_data = await db.get_anime(ani_id)
-                    for ep_val, ep_title, ep_link in found_episodes:
-                        ep_no_str = str(int(ep_val)) if ep_val.is_integer() else str(ep_val)
-                        qual_data = ani_data.get(ep_no_str) if ani_data else None
+                    for ep_val, ep_str, ep_title, ep_link in found_episodes:
+                        qual_data = ani_data.get(ep_str) if ani_data else None
                         
                         if not ani_data or not qual_data or not all(qual_data.get(qual) for qual in Var.QUALS):
                             await rep.report(f"Sync Processing: {ep_title}", "info", log=True)
