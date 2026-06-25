@@ -13,7 +13,7 @@ basicConfig(format="[%(asctime)s] [%(name)s | %(levelname)s] - %(message)s [%(fi
             handlers=[FileHandler('log.txt'), StreamHandler()],
             level=INFO)
 
-load_dotenv('config.env', override=True)
+load_dotenv('.env', override=True)
 
 UPSTREAM_REPO = getenv('UPSTREAM_REPO')
 UPSTREAM_BRANCH = getenv('UPSTREAM_BRANCH')
