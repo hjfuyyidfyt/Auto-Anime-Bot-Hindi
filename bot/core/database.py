@@ -26,6 +26,7 @@ class Database:
         self.rqst_fsub_channel_data = self.__db['request_forcesub_channel']
         self.anime_channels = self.__db['anime_channels']  # Collection for anime-to-channel mappings
         self.settings = self.__db['settings']  # Collection for settings (e.g., sticker_id)
+        self.sync_queue = self.__db[f"sync_queue_{Var.BOT_TOKEN.split(':')[0]}"]
         
         # Anime collection (named using BOT_TOKEN)
         self.__animes = self.__db[f"animes_{Var.BOT_TOKEN.split(':')[0]}"]
@@ -311,6 +312,60 @@ class Database:
             await rep.report("Anime collection dropped", "info", log=True)
         except Exception as e:
             await rep.report(f"Error in reboot: {e}", "error", log=True)
+
+    # SYNC QUEUE MANAGEMENT
+    async def add_to_queue(self, anime_name: str) -> bool:
+        """Add an anime name to the sync queue if it does not already exist as pending/processing."""
+        try:
+            # Check if already in queue (pending or processing)
+            existing = await self.sync_queue.find_one({
+                'anime_name': anime_name,
+                'status': {'$in': ['pending', 'processing']}
+            })
+            if existing:
+                return False
+            
+            await self.sync_queue.insert_one({
+                'anime_name': anime_name,
+                'status': 'pending',
+                'created_at': datetime.now()
+            })
+            return True
+        except Exception as e:
+            await rep.report(f"Failed to add to sync queue: {e}", "error", log=True)
+            return False
+
+    async def get_next_pending_task(self) -> dict | None:
+        """Get the next pending task in the queue."""
+        try:
+            return await self.sync_queue.find_one({'status': 'pending'}, sort=[('created_at', 1)])
+        except Exception as e:
+            await rep.report(f"Failed to get next pending task: {e}", "error", log=True)
+            return None
+
+    async def update_task_status(self, task_id, status: str):
+        """Update a queue task's status."""
+        try:
+            await self.sync_queue.update_one({'_id': task_id}, {'$set': {'status': status, 'updated_at': datetime.now()}})
+        except Exception as e:
+            await rep.report(f"Failed to update task status: {e}", "error", log=True)
+
+    async def get_all_queue_tasks(self) -> list:
+        """Get all queue tasks for reporting."""
+        try:
+            return await self.sync_queue.find().to_list(length=None)
+        except Exception as e:
+            await rep.report(f"Failed to get all queue tasks: {e}", "error", log=True)
+            return []
+
+    async def clear_pending_queue(self) -> int:
+        """Clear all pending tasks from the queue and return count deleted."""
+        try:
+            res = await self.sync_queue.delete_many({'status': 'pending'})
+            return res.deleted_count
+        except Exception as e:
+            await rep.report(f"Failed to clear pending queue: {e}", "error", log=True)
+            return 0
 
 # Initialize the database
 db = Database(Var.DB_URI, Var.DB_NAME)

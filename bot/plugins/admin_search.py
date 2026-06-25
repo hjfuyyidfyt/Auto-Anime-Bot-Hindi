@@ -148,3 +148,128 @@ async def run_manual_sync(anime_title, msg):
             skipped_count += 1
             
     await msg.edit(f"📊 <b>Sync report for {anime_title}:</b>\n- Synced/Queued: {synced_count} episode(s)\n- Skipped (already in DB): {skipped_count} episode(s)")
+
+
+# --- BACKGROUND SYNC QUEUE COMMANDS ---
+
+from bot.core.database import db
+
+active_qadd_sessions = {}
+
+async def in_qadd_session_filter(_, __, message: Message):
+    return message.from_user and message.from_user.id in active_qadd_sessions
+
+qadd_session_filter = filters.create(in_qadd_session_filter)
+
+@bot.on_message(filters.private & admin & qadd_session_filter & filters.text & ~filters.regex(r"^/"))
+async def handle_qadd_input(client: Client, message: Message):
+    user_id = message.from_user.id
+    text = message.text.strip()
+    if not text:
+        return
+    
+    # Split by newlines
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    if not lines:
+        return
+        
+    added_names = []
+    for line in lines:
+        if line not in active_qadd_sessions[user_id]:
+            active_qadd_sessions[user_id].append(line)
+            added_names.append(line)
+            
+    if len(lines) == 1:
+        await message.reply(f"✅ Added: <code>{lines[0]}</code>\nTotal in session: <b>{len(active_qadd_sessions[user_id])}</b>\nSend another, or send /done to save.")
+    else:
+        added_list = "\n".join([f"• <code>{name}</code>" for name in added_names])
+        await message.reply(f"✅ Added {len(added_names)} anime(s):\n{added_list}\n\nTotal in session: <b>{len(active_qadd_sessions[user_id])}</b>\nSend another, or send /done to save.")
+
+@bot.on_message(filters.command("qadd") & filters.private & admin)
+async def qadd_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    active_qadd_sessions[user_id] = []
+    await message.reply(
+        "📥 <b>Queue-Adding Session Started!</b>\n\n"
+        "Please send the names of the anime one-by-one, or paste a newline-delimited list of names.\n\n"
+        "Send /done when you are finished."
+    )
+
+@bot.on_message(filters.command("done") & filters.private & admin)
+async def done_command(client: Client, message: Message):
+    user_id = message.from_user.id
+    if user_id not in active_qadd_sessions:
+        return await message.reply("⚠️ No active queue-adding session. Send /qadd to start one.")
+        
+    anime_list = active_qadd_sessions.pop(user_id)
+    if not anime_list:
+        return await message.reply("⚠️ No anime names were added. Session closed.")
+        
+    added_count = 0
+    skipped_count = 0
+    for name in anime_list:
+        success = await db.add_to_queue(name)
+        if success:
+            added_count += 1
+        else:
+            skipped_count += 1
+            
+    await message.reply(
+        f"📊 <b>Queue Session Closed & Saved!</b>\n"
+        f"- Added to queue: <b>{added_count}</b> new anime(s)\n"
+        f"- Skipped (already in queue/processing): <b>{skipped_count}</b> anime(s)"
+    )
+
+@bot.on_message(filters.command("qlist") & filters.private & admin)
+async def qlist_command(client: Client, message: Message):
+    tasks = await db.get_all_queue_tasks()
+    if not tasks:
+        return await message.reply("📭 The sync queue is currently empty.")
+        
+    processing = []
+    pending = []
+    completed = []
+    failed = []
+    
+    for task in tasks:
+        status = task.get('status', 'pending')
+        name = task.get('anime_name')
+        if status == 'processing':
+            processing.append(name)
+        elif status == 'pending':
+            pending.append(name)
+        elif status == 'completed':
+            completed.append(name)
+        elif status == 'failed':
+            failed.append(name)
+            
+    report = "📋 <b>Sync Queue List</b>\n\n"
+    
+    if processing:
+        report += "🔄 <b>Processing:</b>\n"
+        report += "\n".join([f"• <code>{name}</code>" for name in processing]) + "\n\n"
+        
+    if pending:
+        report += f"⏳ <b>Pending ({len(pending)}):</b>\n"
+        report += "\n".join([f"• <code>{name}</code>" for name in pending]) + "\n\n"
+        
+    if completed:
+        report += f"✅ <b>Completed ({len(completed)}):</b>\n"
+        report += "\n".join([f"• <code>{name}</code>" for name in completed[-5:]])
+        if len(completed) > 5:
+            report += f"\n<i>... and {len(completed) - 5} more completed.</i>"
+        report += "\n\n"
+        
+    if failed:
+        report += f"❌ <b>Failed ({len(failed)}):</b>\n"
+        report += "\n".join([f"• <code>{name}</code>" for name in failed[-5:]])
+        if len(failed) > 5:
+            report += f"\n<i>... and {len(failed) - 5} more failed.</i>"
+        report += "\n"
+        
+    await message.reply(report)
+
+@bot.on_message(filters.command("qclear") & filters.private & admin)
+async def qclear_command(client: Client, message: Message):
+    deleted_count = await db.clear_pending_queue()
+    await message.reply(f"🗑️ <b>Cleared all pending tasks!</b>\nRemoved <b>{deleted_count}</b> pending task(s) from the sync queue.")

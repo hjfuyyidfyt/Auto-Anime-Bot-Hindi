@@ -21,6 +21,7 @@ from config import Var, LOGS
 from bot.core.auto_animes import fetch_animes
 from bot.core.func_utils import clean_up, new_task, editMessage
 from bot.plugins.up_posts import upcoming_animes
+from bot.core.queue_manager import background_sync_worker
 
 # Set bot.rep for use in the application
 bot.rep = rep
@@ -100,6 +101,7 @@ async def main():
 
     sch.start()
     bot_loop.create_task(queue_loop())
+    bot_loop.create_task(background_sync_worker())
     await fetch_animes()
     await idle()
     LOGS.info('Auto Anime Bot Stopped!')

@@ -39,6 +39,8 @@ ffpids_cache = []
 ffLock = Semaphore(1)
 ffQueue = Queue()
 ff_queued = dict()
+active_priority_tasks = set()
+
 
 try:
     bot = Client(

@@ -9,7 +9,7 @@ from time import time
 from pyrogram import Client, filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message
 from config import Var
-from bot.core.bot_instance import bot, bot_loop, ani_cache, ffQueue, ffLock, ff_queued
+from bot.core.bot_instance import bot, bot_loop, ani_cache, ffQueue, ffLock, ff_queued, active_priority_tasks
 from .tordownload import TorDownloader
 from .database import db
 from .func_utils import getfeed, encode, editMessage, sendMessage, convertBytes, get_all_feed_entries
@@ -170,7 +170,11 @@ async def fetch_animes():
                     active_tasks.append(task)
             active_tasks = [task for task in active_tasks if not task.done()]
 
-async def get_animes(name, torrent, force=False):
+async def get_animes(name, torrent, force=False, is_priority=True):
+    task_key = (name, torrent)
+    if is_priority:
+        active_priority_tasks.add(task_key)
+    ani_id = None
     try:
         if "hindi" not in name.lower():
             return
@@ -224,7 +228,7 @@ async def get_animes(name, torrent, force=False):
                         if not ani_data or not qual_data or not all(qual_data.get(qual) for qual in Var.QUALS):
                             await rep.report(f"Sync Processing: {ep_title}", "info", log=True)
                             try:
-                                await get_animes(ep_title, ep_link, force=True)
+                                await get_animes(ep_title, ep_link, force=True, is_priority=is_priority)
                             except Exception as sync_err:
                                 await rep.report(f"Failed to sync {ep_title}: {sync_err}", "error", log=True)
                     
@@ -408,6 +412,8 @@ async def get_animes(name, torrent, force=False):
         await rep.report(f"Error in get_animes for {name}: {format_exc()}", "error", log=True)
         return
     finally:
+        if is_priority:
+            active_priority_tasks.discard(task_key)
         if ani_id:
             ani_cache['completed'].add(ani_id)
 
