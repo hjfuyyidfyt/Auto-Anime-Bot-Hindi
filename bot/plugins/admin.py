@@ -112,15 +112,22 @@ async def delete_admins(client: Client, message: Message):
         await pro.edit("<b><blockquote>No admin IDs available to delete.</blockquote></b>", reply_markup=reply_markup)
 
 
-@bot.on_message(filters.command('admins') & filters.private & filters.user(Var.ADMINS))
+@bot.on_message(filters.command('admins') & filters.private & admin)
 async def get_admins(client: Client, message: Message):
     pro = await message.reply("<b><i>ᴘʟᴇᴀsᴇ ᴡᴀɪᴛ..</i></b>", quote=True)
-    admin_ids = await db.get_all_admins()
+    admin_ids = list(Var.ADMINS)
+    db_admins = await db.get_all_admins()
+    for aid in db_admins:
+        if aid not in admin_ids:
+            admin_ids.append(aid)
 
     if not admin_ids:
         admin_list = "<b><blockquote>❌ No admins found.</blockquote></b>"
     else:
-        admin_list = "\n".join(f"<b><blockquote>ID: <code>{id}</code></blockquote></b>" for id in admin_ids)
+        admin_list = "\n".join(
+            f"<b><blockquote>ID: <code>{id}</code> ({'Owner' if id in Var.ADMINS else 'Admin'})</blockquote></b>"
+            for id in admin_ids
+        )
 
     reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("ᴄʟᴏsᴇ", callback_data="close")]])
     await pro.edit(f"<b>⚡ Current Admin List:</b>\n\n{admin_list}", reply_markup=reply_markup)

@@ -88,7 +88,18 @@ class FFEncoder:
             except:
                 pass
         
-        ffcode = ffargs[self.__qual].format(dl_npath, self.__prog_file, out_npath) + f" 2> '{err_file}'"
+        raw_code = ffargs[self.__qual].format(dl_npath, self.__prog_file, out_npath)
+        
+        # Determine mapping options dynamically to prevent FFmpeg failures on missing tracks
+        audio_map = await get_audio_mapping_arg(dl_npath)
+        sub_map = await get_subtitle_mapping_arg(dl_npath)
+        
+        if "-map 0:a:m:language:hin" in raw_code:
+            raw_code = raw_code.replace("-map 0:a:m:language:hin", audio_map)
+        if "-map 0:s:m:language:eng" in raw_code:
+            raw_code = raw_code.replace("-map 0:s:m:language:eng", sub_map)
+            
+        ffcode = raw_code + f" 2> '{err_file}'"
         
         LOGS.info(f'FFCode: {ffcode}')
         self.__proc = await create_subprocess_shell(ffcode, stdout=DEVNULL)
@@ -124,3 +135,65 @@ class FFEncoder:
                 self.__proc.kill()
             except:
                 pass
+
+
+async def get_audio_mapping_arg(file_path):
+    info = await mediainfo(file_path, get_json=True)
+    if not info or 'media' not in info or 'track' not in info['media']:
+        return "-map 0:a:0"
+    
+    tracks = info['media']['track']
+    if not isinstance(tracks, list):
+        tracks = [tracks]
+        
+    audio_tracks = [t for t in tracks if t.get('@type') == 'Audio']
+    if not audio_tracks:
+        return "-map 0:a:0"
+    
+    # 1. Look for Hindi audio
+    for idx, t in enumerate(audio_tracks):
+        lang = str(t.get('Language', '')).lower()
+        if lang in ('hi', 'hin', 'hindi'):
+            return f"-map 0:a:{idx}"
+            
+    # 2. Look for English audio
+    for idx, t in enumerate(audio_tracks):
+        lang = str(t.get('Language', '')).lower()
+        if lang in ('en', 'eng', 'english'):
+            return f"-map 0:a:{idx}"
+            
+    # 3. Look for Japanese audio
+    for idx, t in enumerate(audio_tracks):
+        lang = str(t.get('Language', '')).lower()
+        if lang in ('ja', 'jpn', 'japanese'):
+            return f"-map 0:a:{idx}"
+            
+    return "-map 0:a:0"
+
+
+async def get_subtitle_mapping_arg(file_path):
+    info = await mediainfo(file_path, get_json=True)
+    if not info or 'media' not in info or 'track' not in info['media']:
+        return "-map 0:s:0?"
+    
+    tracks = info['media']['track']
+    if not isinstance(tracks, list):
+        tracks = [tracks]
+        
+    sub_tracks = [t for t in tracks if t.get('@type') == 'Subtitle']
+    if not sub_tracks:
+        return ""
+    
+    # 1. Look for English subtitles
+    for idx, t in enumerate(sub_tracks):
+        lang = str(t.get('Language', '')).lower()
+        if lang in ('en', 'eng', 'english'):
+            return f"-map 0:s:{idx}"
+            
+    # 2. Look for Hindi subtitles
+    for idx, t in enumerate(sub_tracks):
+        lang = str(t.get('Language', '')).lower()
+        if lang in ('hi', 'hin', 'hindi'):
+            return f"-map 0:s:{idx}"
+            
+    return "-map 0:s:0?"

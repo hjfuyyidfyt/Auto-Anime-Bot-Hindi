@@ -22,6 +22,13 @@ from bot.core.bot_instance import bot, bot_loop
 from config import Var, LOGS
 from .reporter import rep
 
+def is_hindi_release(name: str) -> bool:
+    name_lower = name.lower()
+    return "hindi" in name_lower or (
+        ("multi" in name_lower or "dual" in name_lower) and 
+        ("cr web-dl" in name_lower or "dsnp web-dl" in name_lower or "toonshub" in name_lower or "varyg" in name_lower)
+    )
+
 def handle_logs(func):
     @wraps(func)
     async def wrapper(*args, **kwargs):
@@ -225,6 +232,11 @@ async def mediainfo(file, get_json=False, get_duration=False):
                 return float(jloads(stdout.decode())['media']['track'][0]['Duration'])
             except Exception:
                 return 1440
+        if get_json:
+            try:
+                return jloads(stdout.decode())
+            except Exception:
+                return {}
         return await get_telegraph(stdout.decode())
     except Exception as err:
         await rep.report(format_exc(), "error")
@@ -257,3 +269,91 @@ def convertBytes(sz) -> str:
         sz /= 2**10
         ind += 1
     return f"{round(sz, 2)} {Units[ind]}B"
+
+
+class NyaaEntry:
+    def __init__(self, title, link):
+        self.title = title
+        self.link = link
+
+
+async def search_nyaa_all_pages(anime_name, max_pages=5):
+    """
+    Search Nyaa.si by scraping HTML pages (up to max_pages) to find all historical matching torrents.
+    Returns a list of NyaaEntry objects.
+    """
+    from bs4 import BeautifulSoup
+    import urllib.parse
+    
+    query = f"{anime_name} (Hindi|Multi|MULTi|Dual)"
+    encoded_query = urllib.parse.quote(query)
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    }
+    
+    all_results = []
+    
+    async with ClientSession() as session:
+        for page in range(1, max_pages + 1):
+            url = f"https://nyaa.si/?q={encoded_query}&c=1_2&f=0&p={page}"
+            try:
+                async with session.get(url, headers=headers, timeout=10) as response:
+                    if response.status != 200:
+                        LOGS.error(f"Failed to fetch Nyaa page {page}: status {response.status}")
+                        break
+                    html = await response.text()
+            except Exception as e:
+                LOGS.error(f"Error fetching Nyaa page {page}: {e}")
+                break
+                
+            soup = BeautifulSoup(html, 'html.parser')
+            table = soup.find('table', class_='torrent-list')
+            if not table:
+                break
+                
+            rows = table.find('tbody').find_all('tr') if table.find('tbody') else table.find_all('tr')
+            if not rows:
+                break
+                
+            page_found = 0
+            for row in rows:
+                cols = row.find_all('td')
+                if len(cols) < 5:
+                    continue
+                
+                name_td = cols[1]
+                name_link = None
+                for a in name_td.find_all('a'):
+                    href = a.get('href', '')
+                    if href.startswith('/view/') and not 'comments' in href:
+                        name_link = a
+                        break
+                
+                if not name_link:
+                    continue
+                    
+                title = name_link.get('title', name_link.text).strip()
+                
+                links_td = cols[2]
+                torrent_link = None
+                magnet_link = None
+                for a in links_td.find_all('a'):
+                    href = a.get('href', '')
+                    if 'magnet:' in href:
+                        magnet_link = href
+                    elif href.startswith('/download/') or href.endswith('.torrent'):
+                        if href.startswith('/download/'):
+                            torrent_link = f"https://nyaa.si{href}"
+                        else:
+                            torrent_link = href
+                            
+                download_link = magnet_link or torrent_link
+                if download_link:
+                    all_results.append(NyaaEntry(title, download_link))
+                    page_found += 1
+            
+            if page_found == 0:
+                break
+                
+    return all_results
+

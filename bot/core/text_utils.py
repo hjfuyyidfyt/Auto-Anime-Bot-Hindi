@@ -67,7 +67,7 @@ GENRE_NORMALIZATION = {
 
 ANIME_GRAPHQL_QUERY = """
 query ($id: Int, $search: String, $seasonYear: Int) {
-  Media(id: $id, type: ANIME, format_not_in: [MOVIE, MUSIC, MANGA, NOVEL, ONE_SHOT], search: $search, seasonYear: $seasonYear) {
+  Media(id: $id, type: ANIME, format_not_in: [MUSIC, MANGA, NOVEL, ONE_SHOT], search: $search, seasonYear: $seasonYear) {
     id
     idMal
     title {
@@ -173,7 +173,9 @@ class AniLister:
                 return (resp.status, await resp.json(), resp.headers)
 
     async def get_anidata(self):
-        cache_key = f"{self.__ani_name}:{self.__ani_year}"
+        orig_name = self.__ani_name
+        orig_year = self.__ani_year
+        cache_key = f"{orig_name}:{orig_year}"
         if cache_key in ani_cache:
             return ani_cache[cache_key]
         res_code, resp_json, res_heads = await self.post_data()
@@ -187,6 +189,8 @@ class AniLister:
         if res_code == 200:
             data = resp_json.get('data', {}).get('Media', {}) or {}
             ani_cache[cache_key] = data
+            final_key = f"{self.__ani_name}:{self.__ani_year}"
+            ani_cache[final_key] = data
             return data
         elif res_code == 429:
             retry_after = int(res_heads.get('Retry-After', 10))
@@ -196,6 +200,8 @@ class AniLister:
             await asleep(5)
             return await self.get_anidata()
         await rep.report(f"AniList API Error: {res_code}", "error", log=False)
+        if res_code == 404:
+            ani_cache[cache_key] = {}
         return {}
 
     @handle_logs
@@ -243,6 +249,19 @@ class TextEditor:
         self.anilister = AniLister(self.__name, datetime.now().year)
 
     async def load_anilist(self):
+        if self.__name in ani_cache:
+            self.adata = ani_cache[self.__name]
+            return
+
+        # Determine the start year based on parsed year if available
+        anime_year = self.pdata.get("anime_year")
+        if anime_year:
+            year_str = str(anime_year[-1]) if isinstance(anime_year, list) else str(anime_year)
+            year_clean = ''.join(c for c in year_str if c.isdigit())
+            start_year = int(year_clean) if year_clean else datetime.now().year
+        else:
+            start_year = datetime.now().year
+
         cache_names = set()
         # Add a final fallback: Search by cleaned title only (without Season/Year logic)
         variations = [(False, False), (False, True), (True, False), (True, True), "clean"]
@@ -257,11 +276,15 @@ class TextEditor:
             if not ani_name or ani_name in cache_names:
                 continue
             cache_names.add(ani_name)
-            self.anilister._AniLister__ani_name = ani_name
-            self.anilister._AniLister__vars['search'] = ani_name
-            self.adata = await self.anilister.get_anidata()
+            
+            # Create a fresh AniLister instance for each variation to avoid year pollution
+            anilister = AniLister(ani_name, start_year)
+            self.adata = await anilister.get_anidata()
             if self.adata:
-                break  
+                break
+        
+        # Cache the result under the full release title to skip all variations in the future
+        ani_cache[self.__name] = self.adata
 
     @handle_logs
     async def parse_name(self, no_s=False, no_y=False):
@@ -271,7 +294,10 @@ class TextEditor:
         if anime_name:
             pname = anime_name
             if not no_s and self.pdata.get("episode_number") and anime_season:
-                pname += f" {anime_season}"
+                s_str = str(anime_season[-1]) if isinstance(anime_season, list) else str(anime_season)
+                s_clean = ''.join(c for c in s_str if c.isdigit())
+                if s_clean and int(s_clean) > 1:
+                    pname += f" {s_clean}"
             if not no_y and anime_year:
                 pname += f" {anime_year}"
             return pname

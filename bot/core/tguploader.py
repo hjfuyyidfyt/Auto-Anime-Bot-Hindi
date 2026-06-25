@@ -20,14 +20,21 @@ class TgUploader:
         self.__start = time()
         self.__updater = time()
 
-    async def upload(self, path, qual):
+    async def upload(self, path, qual, thumb=None):
         self.__name = ospath.basename(path)
         self.__qual = qual
+        
+        use_thumb = None
+        if thumb and ospath.exists(thumb):
+            use_thumb = thumb
+        elif ospath.exists("thumb.jpg"):
+            use_thumb = "thumb.jpg"
+            
         try:
             if Var.AS_DOC:
                 return await self.__client.send_document(chat_id=Var.FILE_STORE,
                     document=path,
-                    thumb="thumb.jpg" if ospath.exists("thumb.jpg") else None,
+                    thumb=use_thumb,
                     caption=f"<i>{self.__name}</i>",
                     force_document=True,
                     progress=self.progress_status
@@ -35,14 +42,14 @@ class TgUploader:
             else:
                 return await self.__client.send_video(chat_id=Var.FILE_STORE,
                     video=path,
-                    thumb="thumb.jpg" if ospath.exists("thumb.jpg") else None,
+                    thumb=use_thumb,
                     caption=f"<i>{self.__name}</i>",
                     supports_streaming=True,
                     progress=self.progress_status
                 )
         except FloodWait as e:
             sleep(e.value * 1.5)
-            return await upload(path, qual, thumbnail)
+            return await self.upload(path, qual, thumb)
         except Exception as e:
             await rep.report(format_exc(), "error")
             raise e

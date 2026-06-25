@@ -12,7 +12,7 @@ from config import Var
 from bot.core.bot_instance import bot, bot_loop, ani_cache, ffQueue, ffLock, ff_queued, active_priority_tasks
 from .tordownload import TorDownloader
 from .database import db
-from .func_utils import getfeed, encode, editMessage, sendMessage, convertBytes, get_all_feed_entries
+from .func_utils import getfeed, encode, editMessage, sendMessage, convertBytes, search_nyaa_all_pages, is_hindi_release
 from .text_utils import TextEditor
 from .ffencoder import FFEncoder
 from .tguploader import TgUploader
@@ -175,8 +175,9 @@ async def get_animes(name, torrent, force=False, is_priority=True):
     if is_priority:
         active_priority_tasks.add(task_key)
     ani_id = None
+    local_thumb = None
     try:
-        if "hindi" not in name.lower():
+        if not is_hindi_release(name):
             return
         ani_info = TextEditor(name)
         await ani_info.load_anilist()
@@ -190,19 +191,21 @@ async def get_animes(name, torrent, force=False, is_priority=True):
             ani_cache['synced_animes'] = set()
             
         if ani_id not in ani_cache['synced_animes'] and not force:
-            ani_cache['synced_animes'].add(ani_id)
-            anime_title = ani_info.adata.get('title', {}).get('english') or ani_info.adata.get('title', {}).get('romaji')
-            if anime_title:
-                import urllib.parse
-                await rep.report(f"Auto-Sync triggered for anime: {anime_title}", "info", log=True)
-                query = f"{anime_title} Hindi"
-                rss_url = f"https://nyaa.si/?page=rss&q={urllib.parse.quote(query)}&c=1_2&f=0"
-                entries = await get_all_feed_entries(rss_url)
+            is_synced = await db.is_anime_synced(ani_id)
+            if is_synced:
+                ani_cache['synced_animes'].add(ani_id)
+            else:
+                ani_cache['synced_animes'].add(ani_id)
+                await db.add_synced_anime(ani_id)
+                anime_title = ani_info.adata.get('title', {}).get('english') or ani_info.adata.get('title', {}).get('romaji')
+                if anime_title:
+                    await rep.report(f"Auto-Sync triggered for anime: {anime_title}", "info", log=True)
+                    entries = await search_nyaa_all_pages(anime_title, max_pages=10)
                 
                 found_episodes = []
                 parent_title = ani_info.pdata.get("anime_title")
                 for entry in entries:
-                    if "hindi" not in entry.title.lower():
+                    if not is_hindi_release(entry.title):
                         continue
                     entry_info = TextEditor(entry.title)
                     entry_title = entry_info.pdata.get("anime_title")
@@ -210,25 +213,48 @@ async def get_animes(name, torrent, force=False, is_priority=True):
                     # Verify title matches to avoid API call
                     if entry_title and parent_title and entry_title.lower() == parent_title.lower():
                         try:
-                            ep_val = float(entry_info.pdata.get("episode_number"))
+                            # Extract season
+                            season_raw = entry_info.pdata.get("anime_season", "1")
+                            if isinstance(season_raw, list):
+                                season_str = str(season_raw[-1]) if season_raw else "1"
+                            else:
+                                season_str = str(season_raw)
+                            season_str = ''.join(c for c in season_str if c.isdigit())
+                            season_val = int(season_str) if season_str else 1
+                            
+                            # Extract episode
                             ep_str = entry_info.pdata.get("episode_number")
-                            found_episodes.append((ep_val, ep_str, entry.title, entry.link))
+                            if not ep_str:
+                                continue
+                            if isinstance(ep_str, list):
+                                ep_str = str(ep_str[-1]) if ep_str else "1"
+                            else:
+                                ep_str = str(ep_str)
+                            ep_val = float(ep_str)
+                            
+                            found_episodes.append((season_val, ep_val, ep_str, entry.title, entry.link))
                         except (TypeError, ValueError):
                             continue
                 
-                # Sort episodes chronologically
-                found_episodes.sort(key=lambda x: x[0])
+                # Sort episodes chronologically by season first, then by episode number
+                found_episodes.sort(key=lambda x: (x[0], x[1]))
                 
                 if found_episodes:
                     await rep.report(f"Auto-Sync found {len(found_episodes)} episodes for '{anime_title}'. Syncing...", "info", log=True)
-                    ani_data = await db.get_anime(ani_id)
-                    for ep_val, ep_str, ep_title, ep_link in found_episodes:
+                    for season_val, ep_val, ep_str, ep_title, ep_link in found_episodes:
+                        ep_entry_info = TextEditor(ep_title)
+                        await ep_entry_info.load_anilist()
+                        ep_ani_id = ep_entry_info.adata.get('id')
+                        if not ep_ani_id:
+                            continue
+                        
+                        ani_data = await db.get_anime(ep_ani_id)
                         qual_data = ani_data.get(ep_str) if ani_data else None
                         
                         if not ani_data or not qual_data or not all(qual_data.get(qual) for qual in Var.QUALS):
                             await rep.report(f"Sync Processing: {ep_title}", "info", log=True)
                             try:
-                                await get_animes(ep_title, ep_link, force=True, is_priority=is_priority)
+                                await get_animes(ep_title, ep_link, force=True, is_priority=False)
                             except Exception as sync_err:
                                 await rep.report(f"Failed to sync {ep_title}: {sync_err}", "error", log=True)
                     
@@ -312,6 +338,19 @@ async def get_animes(name, torrent, force=False, is_priority=True):
             main_btns = []
             specific_btns = []
             
+            # Download poster image for video thumbnail
+            if photo_url:
+                if ospath.exists(photo_url):
+                    local_thumb = photo_url
+                else:
+                    try:
+                        import os
+                        os.makedirs("thumbs", exist_ok=True)
+                        from bot.core.func_utils import aio_urldownload
+                        local_thumb = await aio_urldownload(photo_url)
+                    except Exception as e:
+                        LOGS.error(f"Failed to download poster for thumbnail: {e}")
+
             # Initialize main channel buttons with Join Channel and Watch if specific channel exists
             if specific_channel_id:
                 try:
@@ -343,7 +382,7 @@ async def get_animes(name, torrent, force=False, is_priority=True):
                 await asleep(1.5)
                 
                 try:
-                    msg = await TgUploader(stat_msg).upload(out_path, qual)
+                    msg = await TgUploader(stat_msg).upload(out_path, qual, thumb=local_thumb)
                 except Exception as e:
                     await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error", log=True)
                     await stat_msg.delete()
@@ -416,6 +455,12 @@ async def get_animes(name, torrent, force=False, is_priority=True):
             active_priority_tasks.discard(task_key)
         if ani_id:
             ani_cache['completed'].add(ani_id)
+        if local_thumb and local_thumb != Var.CUSTOM_BANNER and not local_thumb.startswith("thumb.jpg") and ospath.exists(local_thumb):
+            try:
+                import os
+                os.remove(local_thumb)
+            except Exception:
+                pass
 
 async def extra_utils(msg_id, out_path):
     msg = await bot.get_messages(Var.FILE_STORE, message_ids=msg_id)

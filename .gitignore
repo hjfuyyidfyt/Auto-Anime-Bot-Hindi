@@ -1,0 +1,11 @@
+venv/
+downloads/
+encode/
+torrents/
+thumbs/
+log.txt
+prog.txt
+.env
+.restartmsg
+__pycache__/
+*.pyc

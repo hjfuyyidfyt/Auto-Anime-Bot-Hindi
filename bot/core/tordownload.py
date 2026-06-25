@@ -1,5 +1,6 @@
 import asyncio
 import time
+import os
 from os import path as ospath
 from aiofiles import open as aiopen
 from aiofiles.os import path as aiopath, remove as aioremove
@@ -30,37 +31,75 @@ class TorDownloader:
             return None
 
     async def _monitored_download(self, mode: str, data: str, name: str = None) -> str | None:
+        import sys
         try:
-            torp = TorrentDownloader(data, self._downdir)
-            task = asyncio.create_task(torp.start_download())
-
-            last_checked = time.time()
-            max_idle = 600
-            check_interval = 30
-
-            while not task.done():
-                await asyncio.sleep(check_interval)
-                # NOTE: Check if usage of `torp.progress` is valid for your version of torrentp
-                # If torrentp object has no progress attribute, this might need adjustment.
-                # Assuming generic behavior:
-                if hasattr(torp, 'progress') and torp.progress < 1:
-                    if time.time() - last_checked > max_idle:
-                        task.cancel()
-                        LOGS.error("[TorDownloader] Dead torrent — no progress for 10 mins.")
-                        return None
-                else:
-                    last_checked = time.time()
-
-            await task
+            # Ensure download directory exists
+            if not os.path.exists(self._downdir):
+                os.makedirs(self._downdir, exist_ok=True)
+                
+            # Get list of files in destination before download starts
+            before_files = set(os.listdir(self._downdir)) if os.path.exists(self._downdir) else set()
             
-            # --- Robust File Finding Logic ---
+            # Start download in a separate subprocess to prevent blocking event loop
+            cmd = (
+                f"import inspect, asyncio; from torrentp import TorrentDownloader; "
+                f"dl = TorrentDownloader('{data}', '{self._downdir}'); "
+                f"asyncio.run(dl.start_download()) if inspect.iscoroutinefunction(dl.start_download) "
+                f"else dl.start_download()"
+            )
+            process = await asyncio.create_subprocess_exec(
+                sys.executable, '-c', cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            start_time = time.time()
+            max_metadata_time = 180  # 3 mins metadata limit
+            max_total_time = 1800  # 30 mins total limit
+            check_interval = 10
+            download_started = False
+            
+            while process.returncode is None:
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=check_interval)
+                except asyncio.TimeoutError:
+                    pass
+                
+                # Check if download started (metadata fetched)
+                current_files = set(os.listdir(self._downdir)) if os.path.exists(self._downdir) else set()
+                new_files = current_files - before_files
+                
+                if new_files and not download_started:
+                    download_started = True
+                    LOGS.info(f"[TorDownloader] Metadata fetched. Download started.")
+                    
+                # Timeouts
+                elapsed = time.time() - start_time
+                if not download_started and elapsed > max_metadata_time:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                    LOGS.error(f"[TorDownloader] Timeout fetching metadata (3 mins). Killed process.")
+                    return None
+                    
+                if elapsed > max_total_time:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
+                    LOGS.error(f"[TorDownloader] Total download timeout (30 mins). Killed process.")
+                    return None
+            
+            # Verify download completed successfully (return code 0)
+            if process.returncode != 0:
+                stdout, stderr = await process.communicate()
+                LOGS.error(f"[TorDownloader] Subprocess failed with exit code {process.returncode}. Stderr: {stderr.decode()}")
+                return None
+
+            
             # 1. Try to get name from metadata if available (safely)
             meta_name = None
-            try:
-                if hasattr(torp, '_torrent_info') and torp._torrent_info and hasattr(torp._torrent_info, '_info'):
-                     meta_name = torp._torrent_info._info.name()
-            except Exception:
-                pass
 
             # 2. Check if meta_name exists
             if meta_name:

@@ -21,7 +21,7 @@ class Reporter:
             self.__logger.critical(text)
         else:
             self.__logger.info(text)
-        if log and self.__cid != 0 and log_type in ["error", "critical"]:
+        if log and self.__cid != 0 and log_type in ["error", "critical", "warning"]:
             try:
                 await self.__client.send_message(self.__cid, text[:4096])
             except FloodWait as f:

@@ -27,6 +27,7 @@ class Database:
         self.anime_channels = self.__db['anime_channels']  # Collection for anime-to-channel mappings
         self.settings = self.__db['settings']  # Collection for settings (e.g., sticker_id)
         self.sync_queue = self.__db[f"sync_queue_{Var.BOT_TOKEN.split(':')[0]}"]
+        self.synced_animes = self.__db[f"synced_animes_{Var.BOT_TOKEN.split(':')[0]}"]
         
         # Anime collection (named using BOT_TOKEN)
         self.__animes = self.__db[f"animes_{Var.BOT_TOKEN.split(':')[0]}"]
@@ -366,6 +367,27 @@ class Database:
         except Exception as e:
             await rep.report(f"Failed to clear pending queue: {e}", "error", log=True)
             return 0
+
+    # SYNCED ANIMES METHODS
+    async def add_synced_anime(self, ani_id: int):
+        """Mark an anime as synced in DB to prevent repeated auto-sync on restart."""
+        try:
+            await self.synced_animes.update_one(
+                {'_id': ani_id},
+                {'$set': {'synced_at': datetime.now()}},
+                upsert=True
+            )
+        except Exception as e:
+            await rep.report(f"Failed to add synced anime {ani_id}: {e}", "error")
+
+    async def is_anime_synced(self, ani_id: int) -> bool:
+        """Check if an anime has been synced."""
+        try:
+            doc = await self.synced_animes.find_one({'_id': ani_id})
+            return bool(doc)
+        except Exception as e:
+            await rep.report(f"Failed to check if anime synced {ani_id}: {e}", "error")
+            return False
 
 # Initialize the database
 db = Database(Var.DB_URI, Var.DB_NAME)
