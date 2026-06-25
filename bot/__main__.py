@@ -73,7 +73,19 @@ async def setup_bot_commands(client):
     default_commands = [
         BotCommand("start", "Start the bot"),
         BotCommand("help", "Help information"),
-        BotCommand("about", "About the bot")
+        BotCommand("about", "About the bot"),
+        BotCommand("commands", "Show all admin commands"),
+        BotCommand("sync", "Sync episodes of an anime"),
+        BotCommand("qadd", "Start queue-adding session"),
+        BotCommand("done", "Save queue session"),
+        BotCommand("qlist", "View background task queue"),
+        BotCommand("qclear", "Clear pending tasks from queue"),
+        BotCommand("restart", "Restart the bot"),
+        BotCommand("stats", "Show bot stats"),
+        BotCommand("admins", "Get list of admins"),
+        BotCommand("listchannels", "List anime specific channel mappings"),
+        BotCommand("list_rss", "List custom RSS feeds"),
+        BotCommand("fsub_mode", "Toggle force sub mode"),
     ]
     
     admin_commands = [
