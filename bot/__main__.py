@@ -65,6 +65,57 @@ async def queue_loop():
             ffQueue.task_done()
         await asleep(10)
 
+async def setup_bot_commands(client):
+    from pyrogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
+    from bot.core.database import db
+    from config import Var, LOGS
+
+    default_commands = [
+        BotCommand("start", "Start the bot"),
+        BotCommand("help", "Help information"),
+        BotCommand("about", "About the bot")
+    ]
+    
+    admin_commands = [
+        BotCommand("start", "Start the bot"),
+        BotCommand("help", "Help information"),
+        BotCommand("about", "About the bot"),
+        BotCommand("commands", "Show all admin commands"),
+        BotCommand("sync", "Sync episodes of an anime"),
+        BotCommand("qadd", "Start queue-adding session"),
+        BotCommand("done", "Save queue session"),
+        BotCommand("qlist", "View background task queue"),
+        BotCommand("qclear", "Clear pending tasks from queue"),
+        BotCommand("restart", "Restart the bot"),
+        BotCommand("stats", "Show bot stats"),
+        BotCommand("admins", "Get list of admins"),
+        BotCommand("listchannels", "List anime specific channel mappings"),
+        BotCommand("list_rss", "List custom RSS feeds"),
+        BotCommand("fsub_mode", "Toggle force sub mode"),
+    ]
+    
+    try:
+        await client.set_bot_commands(default_commands, scope=BotCommandScopeDefault())
+        
+        admins = list(Var.ADMINS)
+        try:
+            db_admins = await db.get_all_admins()
+            for aid in db_admins:
+                if aid not in admins:
+                    admins.append(aid)
+        except Exception as db_err:
+            LOGS.error(f"Failed to fetch DB admins: {db_err}")
+            
+        for admin_id in admins:
+            try:
+                await client.set_bot_commands(admin_commands, scope=BotCommandScopeChat(chat_id=admin_id))
+            except Exception as admin_err:
+                LOGS.warning(f"Failed to set bot commands for admin {admin_id}: {admin_err}")
+                
+        LOGS.info("Bot commands successfully registered!")
+    except Exception as e:
+        LOGS.error(f"Failed to set bot commands: {e}")
+
 async def main():
     sch.add_job(upcoming_animes, "cron", hour=0, minute=30)
     await bot.start()
@@ -74,6 +125,7 @@ async def main():
         me = await bot.get_me()
         bot.username = me.username  # Set bot.username to the bot's Telegram username (e.g., @AutoAniAdvance)
         LOGS.info(f"Bot username set to {bot.username}")
+        await setup_bot_commands(bot)
     except Exception as e:
         LOGS.error(f"Failed to set bot username: {str(e)}")
         await bot.stop()
