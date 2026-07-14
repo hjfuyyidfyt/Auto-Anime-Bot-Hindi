@@ -663,7 +663,9 @@ class TextEditor:
         anime_season = await self.get_season()
         ep_no = self.pdata.get("episode_number") or "N/A"
         
-        if sub_title:
+        if self.adata.get("format") == "MOVIE":
+            season_info_line = "Movie"
+        elif sub_title:
             season_info_line = f"Season {anime_season} ({sub_title}){part_str} • Episode {ep_no}"
         else:
             season_info_line = f"Season {anime_season}{part_str} • Episode {ep_no}"
