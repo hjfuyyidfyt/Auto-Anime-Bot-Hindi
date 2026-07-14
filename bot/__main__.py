@@ -117,7 +117,7 @@ async def setup_bot_commands(client):
         LOGS.error(f"Failed to set bot commands: {e}")
 
 async def main():
-    sch.add_job(upcoming_animes, "cron", hour=0, minute=30)
+    # sch.add_job(upcoming_animes, "cron", hour=0, minute=30)
     await bot.start()
 
  # Set bot username
