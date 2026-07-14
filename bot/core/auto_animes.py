@@ -231,8 +231,11 @@ async def get_animes(name, torrent, force=False, is_priority=True):
         await ani_info.load_anilist()
         ani_id, ep_no = ani_info.adata.get('id'), ani_info.pdata.get("episode_number")
         if not ani_id or not ep_no:
-            await rep.report(f"Invalid anime data for {name}: ID or episode number missing", "error", log=True)
-            return
+            if ani_id and (ani_info.adata.get('format') == 'MOVIE' or ani_info.adata.get('episodes') == 1):
+                ep_no = "1"
+            else:
+                await rep.report(f"Invalid anime data for {name}: ID or episode number missing", "error", log=True)
+                return
 
         # Auto-Sync Entire Series logic
         if 'synced_animes' not in ani_cache:
