@@ -31,6 +31,33 @@ class Database:
         
         # Anime collection (named using BOT_TOKEN)
         self.__animes = self.__db[f"animes_{Var.BOT_TOKEN.split(':')[0]}"]
+        self.timelines = self.__db[f"timelines_{Var.BOT_TOKEN.split(':')[0]}"]
+
+    # TIMELINES CACHE
+    async def get_cached_timeline(self, ani_id: int) -> list:
+        try:
+            doc = await self.timelines.find_one({'related_ids': ani_id})
+            if doc:
+                return doc.get('timeline_nodes')
+        except Exception as e:
+            await rep.report(f"Error in get_cached_timeline: {e}", "error", log=True)
+        return None
+
+    async def save_cached_timeline(self, related_ids: list, timeline_nodes: list) -> None:
+        try:
+            # Upsert using the first related ID as base ID
+            base_id = related_ids[0] if related_ids else 0
+            await self.timelines.update_one(
+                {'_id': base_id},
+                {'$set': {
+                    'related_ids': related_ids,
+                    'timeline_nodes': timeline_nodes,
+                    'updated_at': datetime.now()
+                }},
+                upsert=True
+            )
+        except Exception as e:
+            await rep.report(f"Error in save_cached_timeline: {e}", "error", log=True)
 
     # USER DATA
     async def present_user(self, user_id: int):
@@ -116,11 +143,27 @@ class Database:
         found = await self.fsub_data.find_one({'_id': channel_id})
         return bool(found)
 
-    async def add_channel(self, channel_id: int):
+    async def add_channel(self, channel_id: int, custom_title: str = ""):
         if not await self.channel_exist(channel_id):
-            await self.fsub_data.insert_one({'_id': channel_id})
-            await rep.report(f"Channel added: {channel_id}", "info", log=True)
+            await self.fsub_data.insert_one({'_id': channel_id, 'custom_title': custom_title})
+            await rep.report(f"Channel added: {channel_id}, title={custom_title}", "info", log=True)
             return
+        elif custom_title:
+            await self.fsub_data.update_one({'_id': channel_id}, {'$set': {'custom_title': custom_title}})
+
+    async def get_channel_title(self, channel_id: int):
+        data = await self.fsub_data.find_one({'_id': channel_id})
+        return data.get("custom_title", "") if data else ""
+
+    async def set_channel_title(self, channel_id: int, custom_title: str):
+        await self.fsub_data.update_one({'_id': channel_id}, {'$set': {'custom_title': custom_title}}, upsert=True)
+
+    async def get_channel_link(self, channel_id: int):
+        data = await self.fsub_data.find_one({'_id': channel_id})
+        return data.get("invite_link", "") if data else ""
+
+    async def set_channel_link(self, channel_id: int, invite_link: str):
+        await self.fsub_data.update_one({'_id': channel_id}, {'$set': {'invite_link': invite_link}}, upsert=True)
 
     async def rem_channel(self, channel_id: int):
         if await self.channel_exist(channel_id):
@@ -194,8 +237,8 @@ class Database:
             await rep.report(f"Error in get_anime for ani_id={ani_id}: {e}", "error", log=True)
             return {}
 
-    async def save_anime(self, ani_id: int, ep_no: str, qual: str, post_id: int = None, file_msg_id: int = None):
-        """Save anime episode data with quality, post ID (main channel), and file message ID."""
+    async def save_anime(self, ani_id: int, ep_no: str, qual: str, post_id: int = None, file_msg_id: int = None, spec_post_id: int = None):
+        """Save anime episode data with quality, post ID (main channel), specific post ID, and file message ID."""
         try:
             # Fetch existing data for the episode
             anime_data = await self.get_anime(ani_id)
@@ -209,6 +252,10 @@ class Database:
             
             if post_id:
                 update_fields["msg_id"] = post_id
+                update_fields[f"episodes.{ep_no}.post_id"] = post_id
+                
+            if spec_post_id:
+                update_fields[f"episodes.{ep_no}.spec_post_id"] = spec_post_id
                 
             if file_msg_id:
                 # Store file_msg_id in a nested dictionary: episodes.<ep_no>.ids.<qual>
@@ -245,26 +292,35 @@ class Database:
             await rep.report(f"Failed to get batch: {e}", "error")
             return []
 
-    async def set_anime_channel(self, ani_id: int, channel_id: int):
-        """Set the channel ID for an anime."""
+    async def set_anime_channel(self, ani_id: int, channel_id: int, anime_name: str = ""):
+        """Set the channel ID and optional anime name for an anime, mapping to base ID if cached."""
         try:
+            timeline_doc = await self.timelines.find_one({'related_ids': ani_id})
+            lookup_id = timeline_doc.get('_id') if timeline_doc else ani_id
+            
+            update_data = {'channel_id': channel_id}
+            if anime_name:
+                update_data['anime_name'] = anime_name
             await self.anime_channels.update_one(
-                {'ani_id': ani_id},
-                {'$set': {'channel_id': channel_id}},
+                {'ani_id': lookup_id},
+                {'$set': update_data},
                 upsert=True
             )
-            await rep.report(f"Set anime channel: ani_id={ani_id}, channel_id={channel_id}", "info", log=True)
+            await rep.report(f"Set anime channel: ani_id={lookup_id}, channel_id={channel_id}, anime_name={anime_name}", "info", log=True)
         except Exception as e:
             await rep.report(f"Failed to set anime channel for ani_id={ani_id}: {e}", "error", log=True)
             raise
 
     async def get_anime_channel(self, ani_id: int) -> int | None:
-        """Get the channel ID for an anime."""
+        """Get the channel ID for an anime, resolving to base ID first."""
         try:
-            doc = await self.anime_channels.find_one({'ani_id': ani_id})
+            timeline_doc = await self.timelines.find_one({'related_ids': ani_id})
+            lookup_id = timeline_doc.get('_id') if timeline_doc else ani_id
+            
+            doc = await self.anime_channels.find_one({'ani_id': lookup_id})
             if doc:
                 return doc['channel_id']
-            await rep.report(f"No channel found for ani_id={ani_id}", "info", log=True)
+            await rep.report(f"No channel found for ani_id={ani_id} (lookup_id={lookup_id})", "info", log=True)
             return None
         except Exception as e:
             await rep.report(f"Failed to get anime channel for ani_id={ani_id}: {e}", "error", log=True)
@@ -274,12 +330,22 @@ class Database:
         """Get all anime-to-channel mappings."""
         try:
             docs = await self.anime_channels.find().to_list(length=None)
-            mappings = [{"ani_id": doc["ani_id"], "channel_id": doc["channel_id"]} for doc in docs]
+            mappings = [{"ani_id": doc["ani_id"], "channel_id": doc["channel_id"], "anime_name": doc.get("anime_name")} for doc in docs]
             await rep.report(f"Retrieved {len(mappings)} anime channel mappings", "info", log=True)
             return mappings
         except Exception as e:
             await rep.report(f"Failed to get all anime channels: {e}", "error", log=True)
             return []
+
+    async def delete_anime_channel(self, ani_id: int) -> bool:
+        """Delete the channel mapping for an anime."""
+        try:
+            res = await self.anime_channels.delete_one({'ani_id': ani_id})
+            await rep.report(f"Deleted anime channel mapping: ani_id={ani_id}", "info", log=True)
+            return res.deleted_count > 0
+        except Exception as e:
+            await rep.report(f"Failed to delete anime channel mapping for ani_id={ani_id}: {e}", "error", log=True)
+            return False
 
     async def set_sticker(self, sticker_id: str):
         """Set the sticker ID."""

@@ -35,9 +35,6 @@ class FFEncoder:
         self.__start_time = time()
 
     async def progress(self):
-        self.__total_time = await mediainfo(self.dl_path, get_duration=True)
-        if isinstance(self.__total_time, str):
-            self.__total_time = 1.0
         while not (self.__proc is None or self.is_cancelled):
             if self.__proc.returncode is not None:
                 break
@@ -77,8 +74,14 @@ class FFEncoder:
         async with aiopen(self.__prog_file, 'w+'):
             LOGS.info("Progress Temp Generated !")
             pass
+            
+        # Get duration before renaming the file
+        self.__total_time = await mediainfo(self.dl_path, get_duration=True)
+        if isinstance(self.__total_time, str) or not self.__total_time:
+            self.__total_time = 1.0
         
-        dl_npath, out_npath = ospath.join("encode", "ffanimeadvin.mkv"), ospath.join("encode", "ffanimeadvout.mkv")
+        ext = ospath.splitext(self.dl_path)[1] or ".mkv"
+        dl_npath, out_npath = ospath.join("encode", f"ffanimeadvin{ext}"), ospath.join("encode", f"ffanimeadvout.mkv")
         await aiorename(self.dl_path, dl_npath)
         
         err_file = ospath.join("encode", "ffmpeg_err.txt")

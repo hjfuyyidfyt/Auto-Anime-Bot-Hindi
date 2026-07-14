@@ -24,10 +24,15 @@ from .reporter import rep
 
 def is_hindi_release(name: str) -> bool:
     name_lower = name.lower()
-    return "hindi" in name_lower or (
-        ("multi" in name_lower or "dual" in name_lower) and 
-        ("cr web-dl" in name_lower or "dsnp web-dl" in name_lower or "toonshub" in name_lower or "varyg" in name_lower)
-    )
+    if "hindi" in name_lower:
+        return True
+        
+    has_explicit_multi = any(kw in name_lower for kw in ("multi-audio", "multi audio", "dual-audio", "dual audio", "multi-audios", "multi audios"))
+    
+    if has_explicit_multi:
+        if any(g in name_lower for g in ("cr web-dl", "dsnp web-dl", "toonshub", "varyg")):
+            return True
+    return False
 
 def handle_logs(func):
     @wraps(func)

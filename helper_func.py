@@ -24,6 +24,32 @@ async def check_admin(filter, client, update):
         print(f"! Exception in check_admin: {e}")
         return False
 
+async def get_fsub_link(client, channel_id: int, force_refresh: bool = False):
+    if not force_refresh:
+        cached_link = await db.get_channel_link(channel_id)
+        if cached_link:
+            return cached_link
+
+    mode = await db.get_channel_mode(channel_id)
+    try:
+        data = await client.get_chat(channel_id)
+        if data.username:
+            link = f"https://t.me/{data.username}"
+        elif mode == "on":
+            invite = await client.create_chat_invite_link(
+                chat_id=channel_id,
+                creates_join_request=True
+            )
+            link = invite.invite_link
+        else:
+            link = data.invite_link or await client.export_chat_invite_link(channel_id)
+        
+        await db.set_channel_link(channel_id, link)
+        return link
+    except Exception as e:
+        print(f"[!] Error in get_fsub_link for {channel_id}: {e}")
+        return f"https://t.me/c/{str(channel_id)[4:]}"
+
 async def is_subscribed(client, user_id, chat_id: int = None):
     if chat_id:
         return await is_sub(client, user_id, chat_id)

@@ -24,6 +24,14 @@ class TgUploader:
         self.__name = ospath.basename(path)
         self.__qual = qual
         
+        # Check file size limit (2 GB = 2097152000 bytes)
+        if ospath.exists(path) and ospath.getsize(path) > 2097152000:
+            err_msg = f"⚠️ File <code>{self.__name}</code> exceeds Telegram's 2GB bot upload limit ({convertBytes(ospath.getsize(path))}). Skipping upload."
+            await rep.report(err_msg, "error")
+            if ospath.exists(path):
+                await aioremove(path)
+            return None
+
         use_thumb = None
         if thumb and ospath.exists(thumb):
             use_thumb = thumb
@@ -51,10 +59,14 @@ class TgUploader:
             sleep(e.value * 1.5)
             return await self.upload(path, qual, thumb)
         except Exception as e:
-            await rep.report(format_exc(), "error")
+            if "bigger than" in str(e):
+                await rep.report(f"⚠️ Telegram 2GB upload limit exceeded for {self.__name}", "error")
+            else:
+                await rep.report(format_exc(), "error")
             raise e
         finally:
-            await aioremove(path)
+            if ospath.exists(path):
+                await aioremove(path)
 
     async def progress_status(self, current, total):
         if self.cancelled:

@@ -17,6 +17,7 @@ from .text_utils import TextEditor
 from .ffencoder import FFEncoder
 from .tguploader import TgUploader
 from .reporter import rep
+from .fallback_downloader import MovieBoxFallback
 
 btn_formatter = {
     'HDRip': '𝗛𝗗𝗥𝗶𝗽',
@@ -29,8 +30,8 @@ btn_formatter = {
 @bot.on_message(filters.command("add_rss") & filters.user(Var.ADMINS))
 async def add_custom_rss(client, message: Message):
     if len(message.command) < 2:
-        await message.reply_text("❗ Usage:\n<code>/addrss https://example.com/rss</code>")
-        await rep.report("Invalid /addrss command: Missing URL", "error", log=True)
+        bot.user_states[message.from_user.id] = "waiting_for_addrss"
+        await message.reply_text("📡 <b>Please send the custom RSS feed URL to add:</b>", quote=True)
         return
 
     url = message.command[1]
@@ -45,19 +46,28 @@ async def add_custom_rss(client, message: Message):
 
 @bot.on_message(filters.command("list_rss") & filters.user(Var.ADMINS))
 async def list_rss(client, message: Message):
-    feeds = list(ani_cache.get("custom_rss", []))
+    feeds = sorted(list(ani_cache.get("custom_rss", [])))
     if not feeds:
-        await message.reply_text("⚠️ No custom RSS links added yet.")
+        buttons = [[InlineKeyboardButton("Add RSS ➕", callback_data="addrss_prompt")]]
+        await message.reply_text("⚠️ No custom RSS links added yet.", reply_markup=InlineKeyboardMarkup(buttons))
         await rep.report("No custom RSS links found.", "warning", log=True)
     else:
-        await message.reply_text("📡 Custom RSS Feeds:\n" + "\n".join([f"• {f}" for f in feeds]))
+        text = "📡 <b>Custom RSS Feeds:</b>\n\n"
+        buttons = []
+        for index, url in enumerate(feeds):
+            text += f"<b>{index + 1}.</b> <code>{url}</code>\n"
+            buttons.append([InlineKeyboardButton(f"❌ Delete Feed {index + 1}", callback_data=f"delrss_{index}")])
+        buttons.append([
+            InlineKeyboardButton("Add RSS ➕", callback_data="addrss_prompt"),
+            InlineKeyboardButton("Close ✖️", callback_data="close")
+        ])
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
         await rep.report("Listed custom RSS feeds.", "info", log=True)
 
 @bot.on_message(filters.command("remove_rss") & filters.user(Var.ADMINS))
 async def remove_rss(client, message: Message):
     if len(message.command) < 2:
-        await message.reply_text("❗ Usage:\n<code>/removerss https://example.com/rss</code>")
-        await rep.report("Invalid /removerss command: Missing URL", "error", log=True)
+        await message.reply_text("❗ Usage:\n<code>/remove_rss https://example.com/rss</code>\n\nOr use /list_rss to delete via buttons.")
         return
 
     url = message.command[1]
@@ -72,8 +82,8 @@ async def remove_rss(client, message: Message):
 @bot.on_message(filters.command("setchannel") & filters.user(Var.ADMINS))
 async def set_channel(client, message: Message):
     if len(message.command) < 3:
-        await message.reply_text("<u>Usᴇ ɪᴛ ʟɪᴋᴇ ᴛʜɪs</u> : \n<blockquote expandable>/setchannel <ᴀɴɪᴍᴇ_ɴᴀᴍᴇ> <ᴄʜᴀɴɴᴇʟ_ɪᴅ></blockquote>")
-        await rep.report("<blockquote>Iɴᴠᴀʟɪᴅ /setchannel ᴄᴏᴍᴍᴀɴᴅ: Mɪssɪɴɢ ᴀɴɪᴍᴇ ɴᴀᴍᴇ ᴏʀ ᴄʜᴀɴɴᴇʟ ID</blockquote>", "error", log=True)
+        bot.user_states[message.from_user.id] = "waiting_for_setchannel"
+        await message.reply_text("📢 <b>Please send the mapping details:</b>\nFormat: <code><Anime Name or ID> <Channel ID></code>\nExample: <code>DAN DA DAN -1002812370717</code>", quote=True)
         return
 
     anime_name = " ".join(message.command[1:-1])
@@ -81,7 +91,6 @@ async def set_channel(client, message: Message):
         channel_id = int(message.command[-1])
     except ValueError:
         await message.reply_text("⚠️ Iɴᴠᴀʟɪᴅ ᴄʜᴀɴɴᴇʟ ID. Pʟᴇᴀsᴇ ᴘʀᴏᴠɪᴅᴇ ᴀ ɴᴜᴍᴇʀɪᴄ ᴄʜᴀᴛ ID.")
-        await rep.report(f"⚠️ Iɴᴠᴀʟɪᴅ ᴄʜᴀɴɴᴇʟ ID {message.command[-1]}", "error", log=True)
         return
 
     ani_info = TextEditor(anime_name)
@@ -89,13 +98,39 @@ async def set_channel(client, message: Message):
     ani_id = ani_info.adata.get('id')
 
     if not ani_id:
-        await message.reply_text(f"⚠️ Aɴɪᴍᴇ ɴᴏᴛ ғᴏᴜɴᴅ : {anime_name}")
-        await rep.report(f"⚠️ Aɴɪᴍᴇ ɴᴏᴛ ғᴏᴜɴᴅ : {anime_name}", "error", log=True)
-        return
+        if anime_name.isdigit():
+            ani_id = int(anime_name)
+        else:
+            await message.reply_text(f"⚠️ Aɴɪᴍᴇ ɴᴏᴛ ғᴏᴜɴᴅ : {anime_name}")
+            return
 
     await db.set_anime_channel(ani_id, channel_id)
-    await message.reply_text(f"<b><blockquote>✅ <u>Aɴɪᴍᴇ</u> : {anime_name} \n<u>Iᴅ</u> : {ani_id} Sᴜᴄᴄᴇssғᴜʟʟʏ sᴇᴛ ᴛᴏ ᴄʜᴀɴɴᴇʟ {channel_id}</blockquote></b>")
+    await message.reply_text(f"<b><blockquote>✅ <u>Aɴɪᴍᴇ ID</u> : {ani_id} \n<u>Sᴇᴛ ᴛᴏ ᴄʜᴀɴɴᴇʟ</u> : {channel_id}</blockquote></b>")
     await rep.report(f"Anime {anime_name} (ID: {ani_id}) set to channel {channel_id}", "info", log=True)
+
+@bot.on_message(filters.command("delchannel") & filters.user(Var.ADMINS))
+async def del_channel(client, message: Message):
+    if len(message.command) < 2:
+        await message.reply_text("❗ Usage:\n<code>/delchannel <anime_name_or_id></code>\n\nOr use /listchannels to delete via buttons.")
+        return
+
+    anime_name = " ".join(message.command[1:])
+    ani_info = TextEditor(anime_name)
+    await ani_info.load_anilist()
+    ani_id = ani_info.adata.get('id')
+
+    if not ani_id:
+        if anime_name.isdigit():
+            ani_id = int(anime_name)
+        else:
+            await message.reply_text(f"⚠️ Anime not found: {anime_name}")
+            return
+
+    res = await db.delete_anime_channel(ani_id)
+    if res:
+        await message.reply_text(f"✅ Mapping for ID <code>{ani_id}</code> removed successfully.")
+    else:
+        await message.reply_text(f"⚠️ No mapping found for ID <code>{ani_id}</code>.")
 
 @bot.on_message(filters.command("setsticker") & filters.user(Var.ADMINS))
 async def set_sticker(client, message: Message):
@@ -126,25 +161,38 @@ async def list_channels(client, message: Message):
     try:
         mappings = await db.get_all_anime_channels()
         if not mappings:
-            await message.reply_text("⚠️ Nᴏ ᴀɴɪᴍᴇ ᴄʜᴀɴɴᴇʟs ᴍᴀᴘᴘᴇᴅ ʏᴇᴛ.")
+            buttons = [[InlineKeyboardButton("Set Mapping ➕", callback_data="setmap_prompt")]]
+            await message.reply_text("⚠️ Nᴏ ᴀɴɪᴍᴇ ᴄʜᴀɴɴᴇʟs ᴍᴀᴘᴘᴇᴅ ʏᴇᴛ.", reply_markup=InlineKeyboardMarkup(buttons))
             await rep.report("Nᴏ ᴀɴɪᴍᴇ ᴄʜᴀɴɴᴇʟs ᴍᴀᴘᴘᴇᴅ ʏᴇT.", "warning", log=True)
             return
 
-        response = "• Aɴɪᴍᴇ ᴄʜᴀɴɴᴇʟ ᴍᴀᴘᴘɪɴɢ :\n\n"
+        text = "• <b>Aɴɪᴍᴇ ᴄʜᴀɴɴᴇʟ ᴍᴀᴘᴘɪɴɢ:</b>\n\n"
+        buttons = []
+        from bot.core.text_utils import get_anime_by_id
         for mapping in mappings:
             ani_id = mapping["ani_id"]
             channel_id = mapping["channel_id"]
-            try:
-                ani_info = TextEditor(f"id:{ani_id}")
-                await ani_info.load_anilist()
-                anime_name = ani_info.adata.get('title', {}).get('romaji', f"Unknown (ID: {ani_id})")
-                response += f"• {anime_name}: {channel_id}\n"
-            except Exception as e:
-                await rep.report(f"Failed to fetch anime name for ani_id={ani_id}: {str(e)}", "error", log=True)
-                response += f"• Unknown (ID: {ani_id}): {channel_id}\n"
+            anime_name = mapping.get("anime_name")
+            if not anime_name:
+                try:
+                    ani_data = await get_anime_by_id(ani_id)
+                    anime_name = (ani_data.get('title') or {}).get('romaji') or (ani_data.get('title') or {}).get('english') or f"Anime {ani_id}"
+                    await db.set_anime_channel(ani_id, channel_id, anime_name)
+                except Exception:
+                    anime_name = f"Anime {ani_id}"
+            
+            text += f"• id:<code>{ani_id}</code> (name: <code>{anime_name}</code>) ➡️ <code>{channel_id}</code>\n"
+            buttons.append([InlineKeyboardButton(f"❌ Remove {anime_name[:25]}", callback_data=f"delmap_{ani_id}")])
 
-        await message.reply_text(response)
+        buttons.append([
+            InlineKeyboardButton("Set Mapping ➕", callback_data="setmap_prompt"),
+            InlineKeyboardButton("Close ✖️", callback_data="close")
+        ])
+        await message.reply_text(text, reply_markup=InlineKeyboardMarkup(buttons))
         await rep.report(f"Listed {len(mappings)} anime channel mappings", "info", log=True)
+    except Exception as e:
+        await message.reply_text("⚠️ Eʀʀᴏʀ ғᴇᴛᴄʜɪɴɢ ᴀɴɪᴍᴇ ᴄʜᴀɴɴᴇʟ ᴍᴀᴘᴘɪɴɢs.")
+        await rep.report(f"Error in list_channels: {str(e)}", "error", log=True)
     except Exception as e:
         await message.reply_text("⚠️ Eʀʀᴏʀ ғᴇᴛᴄʜɪɴɢ ᴀɴɪᴍᴇ ᴄʜᴀɴɴᴇʟ ᴍᴀᴘᴘɪɴɢs.")
         await rep.report(f"Error in list_channels: {str(e)}", "error", log=True)
@@ -258,9 +306,6 @@ async def get_animes(name, torrent, force=False, is_priority=True):
                             except Exception as sync_err:
                                 await rep.report(f"Failed to sync {ep_title}: {sync_err}", "error", log=True)
                     
-                    await rep.report(f"Auto-Sync complete for anime: {anime_title}!", "info", log=True)
-                    return
-
         if ani_id not in ani_cache['ongoing']:
             ani_cache['ongoing'].add(ani_id)
         elif not force:
@@ -282,50 +327,60 @@ async def get_animes(name, torrent, force=False, is_priority=True):
             specific_channel_id = await db.get_anime_channel(ani_id)
             main_caption = await ani_info.get_caption()
             
-            # Send to main channel
-            if photo_url and ospath.exists(photo_url):
-                with open(photo_url, 'rb') as photo_file:
-                    main_post_msg = await bot.send_photo(
-                        Var.MAIN_CHANNEL,
-                        photo=photo_file,
-                        caption=main_caption
-                    )
-            else:
-                main_post_msg = await bot.send_photo(
-                    Var.MAIN_CHANNEL,
-                    photo=photo_url or "https://ibb.co/5xjBCXKp",
-                    caption=main_caption
-                )
-            
-            # Send to specific channel if mapped
-            specific_post_msg = None
-            if specific_channel_id:
-                try:
-                    if photo_url and ospath.exists(photo_url):
-                        with open(photo_url, 'rb') as photo_file:
-                            specific_post_msg = await bot.send_photo(
-                                specific_channel_id,
-                                photo=photo_file,
-                                caption=main_caption
-                            )
-                    else:
-                        specific_post_msg = await bot.send_photo(
-                            specific_channel_id,
-                            photo=photo_url or "https://ibb.co/5xjBCXKp",
-                            caption=main_caption
-                        )
-                except Exception as e:
-                    await rep.report(f"Failed to send to specific channel {specific_channel_id} for {name}: {str(e)}", "error", log=True)
-            
             await asleep(1.5)
             stat_msg = await sendMessage(Var.FILE_STORE, f"‣ <b>Aɴɪᴍᴇ Nᴀᴍᴇ :</b>\n<blockquote><b><i>{name}</i></b></blockquote>\n\n<blockquote><i>Dᴏᴡɴʟᴏᴀᴅɪɴɢ....</i></blockquote>")
             dl = await TorDownloader("./downloads").download(torrent, name)
+            is_moviebox_dl = False  # Flag to track if download came from MovieBox
             if not dl or not ospath.exists(dl):
-                await rep.report(f"File Download Incomplete, Try Again", "error", log=True)
+                # === MovieBox Fallback ===
+                try:
+                    await bot.send_message(
+                        chat_id=Var.LOG_CHANNEL,
+                        text=f"<b>⚡ Torrent failed, trying MovieBox...</b>\n\n<b>• Anime:</b> <code>{name}</code>"
+                    )
+                except Exception as log_err:
+                    LOGS.error(f"Failed to send torrent failed log: {log_err}")
+                titles = ani_info.adata.get('title', {})
+                clean_name = titles.get('english') or titles.get('romaji') or ''
+                # Extract season and episode numbers
+                fb_season = int(await ani_info.get_season())
+                try:
+                    ep_raw = ani_info.pdata.get('episode_number', '1')
+                    fb_episode = int(ep_raw) if not isinstance(ep_raw, list) else int(ep_raw[-1])
+                except (ValueError, TypeError):
+                    fb_episode = 1
+                fb_filename = f"moviebox_{clean_name.replace(' ', '_')}_S{fb_season}E{fb_episode}.mp4"
+                
+                fallback = MovieBoxFallback("./downloads")
+                dl = await fallback.try_fallback(clean_name, fb_season, fb_episode, fb_filename, ani_id=ani_info.adata.get('id'))
+                if dl and ospath.exists(dl):
+                    is_moviebox_dl = True
+                else:
+                    await rep.report(f"File Download Incomplete (Torrent + MovieBox both failed)", "error", log=True)
+                    await stat_msg.delete()
+                    return
+            # === Audio stream language verification layer ===
+            from bot.core.audio_probe import has_hindi_audio
+            if not await has_hindi_audio(dl):
+                await rep.report(f"⚠️ Skipping: Downloaded file has no Hindi audio track! Filename: {ospath.basename(dl)}", "warning", log=True)
+                try:
+                    await bot.send_message(
+                        chat_id=Var.LOG_CHANNEL,
+                        text=f"<b>⚠️ Skipping Encode (No Hindi Audio Track)</b>\n\n<b>• Anime:</b> <code>{name}</code>\n<b>• Filename:</b> <code>{ospath.basename(dl)}</code>"
+                    )
+                except Exception:
+                    pass
+                try:
+                    await aioremove(dl)
+                except Exception:
+                    pass
                 await stat_msg.delete()
                 return
+
+            # Use unique task identifier for the lock queue
+            post_id = f"{ani_id}_{ep_no}"
             
-            post_id = main_post_msg.id
+            # === Multi-Quality Encoding Flow ===
             ffEvent = Event()
             ff_queued[post_id] = ffEvent
             if ffLock.locked():
@@ -335,8 +390,8 @@ async def get_animes(name, torrent, force=False, is_priority=True):
             await ffEvent.wait()
             await ffLock.acquire()
             
-            main_btns = []
-            specific_btns = []
+            uploaded_qual_msg_ids = {}
+            local_thumb = None
             
             # Download poster image for video thumbnail
             if photo_url:
@@ -350,18 +405,6 @@ async def get_animes(name, torrent, force=False, is_priority=True):
                         local_thumb = await aio_urldownload(photo_url)
                     except Exception as e:
                         LOGS.error(f"Failed to download poster for thumbnail: {e}")
-
-            # Initialize main channel buttons with Join Channel and Watch if specific channel exists
-            if specific_channel_id:
-                try:
-                    channel_invite = await bot.export_chat_invite_link(specific_channel_id)
-                    main_btns.append([
-                        InlineKeyboardButton("• ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ •", url=channel_invite),
-                        InlineKeyboardButton("• ᴡᴀᴛᴄʜ ᴀɴɪᴍᴇ •", url=f"https://t.me/c/{str(specific_channel_id)[4:]}/{specific_post_msg.id if specific_post_msg else 0}")
-                    ])
-                    await editMessage(main_post_msg, main_post_msg.caption.html if main_post_msg.caption else "", InlineKeyboardMarkup(main_btns))
-                except Exception as e:
-                    await rep.report(f"Failed to get invite link for channel {specific_channel_id}: {str(e)}", "warning", log=True)
             
             for qual in Var.QUALS:
                 filename = await ani_info.get_upname(qual)
@@ -391,46 +434,128 @@ async def get_animes(name, torrent, force=False, is_priority=True):
                 
                 await rep.report("Sᴜᴄᴄᴇssғᴜʟʟʏ Uᴘʟᴏᴀᴅᴇᴅ Fɪʟᴇ ɪɴᴛᴏ Cʜᴀɴɴᴇʟ...", "info", log=True)
                 msg_id = msg.id
-                link = f"https://telegram.me/{(await bot.get_me()).username}?start={await encode('get-'+str(msg_id * abs(Var.FILE_STORE)))}"
+                uploaded_qual_msg_ids[qual] = msg_id
                 
-                # Only add quality buttons to specific channel if mapped, otherwise to main channel
-                if specific_channel_id:
-                    if specific_btns and len(specific_btns[-1]) == 1:
-                        specific_btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
-                    else:
-                        specific_btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
-                    # Update specific channel post immediately
-                    if specific_post_msg:
-                        await editMessage(specific_post_msg, specific_post_msg.caption.html if specific_post_msg.caption else "", InlineKeyboardMarkup(specific_btns))
-                        # Update main channel with Watch button pointing to specific channel post
-                        main_btns[0][1] = InlineKeyboardButton("• ᴡᴀᴛᴄʜ ᴀɴɪᴍᴇ •", url=f"https://t.me/c/{str(specific_channel_id)[4:]}/{specific_post_msg.id}")
-                        await editMessage(main_post_msg, main_post_msg.caption.html if main_post_msg.caption else "", InlineKeyboardMarkup(main_btns))
-                else:
-                    if main_btns and len(main_btns[-1]) == 1:
-                        main_btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
-                    else:
-                        main_btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
-                    # Update main channel post immediately
-                    await editMessage(main_post_msg, main_post_msg.caption.html if main_post_msg.caption else "", InlineKeyboardMarkup(main_btns))
+                # Save progress to database immediately under file_msg_id
+                await db.save_anime(ani_id, ep_no, qual, post_id=None, file_msg_id=msg_id)
                 
-                await db.save_anime(ani_id, ep_no, qual, post_id, file_msg_id=msg_id)
-                
-                # Log to LOG_CHANNEL
                 try:
-                    source_str = "Manual Command / Sync" if force else "Auto-Sync Feed"
-                    log_text = f"""<b>📥 New Video Uploaded</b>
+                    await aioremove(out_path)
+                except:
+                    pass
+
+            # Build quality button markups
+            specific_btns = []
+            main_btns = []
+            
+            for qual in Var.QUALS:
+                m_id = uploaded_qual_msg_ids.get(qual)
+                if m_id:
+                    link = f"https://telegram.me/{(await bot.get_me()).username}?start={await encode('get-'+str(m_id * abs(Var.FILE_STORE)))}"
+                    btn = InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)
+                    
+                    if specific_channel_id:
+                        if specific_btns and len(specific_btns[-1]) == 1:
+                            specific_btns[-1].append(btn)
+                        else:
+                            specific_btns.append([btn])
+                    else:
+                        if main_btns and len(main_btns[-1]) == 1:
+                            main_btns[-1].append(btn)
+                        else:
+                            main_btns.append([btn])
+
+            # 1. Post to specific channel if mapped
+            specific_post_msg = None
+            if specific_channel_id:
+                try:
+                    if photo_url and ospath.exists(photo_url):
+                        with open(photo_url, 'rb') as photo_file:
+                            specific_post_msg = await bot.send_photo(
+                                specific_channel_id,
+                                photo=photo_file,
+                                caption=main_caption,
+                                reply_markup=InlineKeyboardMarkup(specific_btns) if specific_btns else None
+                            )
+                    else:
+                        specific_post_msg = await bot.send_photo(
+                            specific_channel_id,
+                            photo=photo_url or "https://ibb.co/5xjBCXKp",
+                            caption=main_caption,
+                            reply_markup=InlineKeyboardMarkup(specific_btns) if specific_btns else None
+                        )
+                except Exception as e:
+                    await rep.report(f"Failed to send to specific channel {specific_channel_id} for {name}: {str(e)}", "error", log=True)
+
+            # 2. Setup main channel buttons (Watch button pointing directly to specific channel post if mapped)
+            if specific_channel_id and specific_post_msg:
+                try:
+                    from helper_func import get_fsub_link
+                    channel_invite = await get_fsub_link(bot, specific_channel_id)
+                    spec_chat = await bot.get_chat(specific_channel_id)
+                    if spec_chat.username:
+                        watch_url = f"https://t.me/{spec_chat.username}/{specific_post_msg.id}"
+                    else:
+                        watch_url = f"https://t.me/c/{str(specific_channel_id)[4:]}/{specific_post_msg.id}"
+
+                    main_btns = [
+                        [
+                            InlineKeyboardButton("• ᴊᴏɪɴ ᴄʜᴀɴɴᴇʟ •", url=channel_invite),
+                            InlineKeyboardButton("• ᴡᴀᴛᴄʜ ᴀɴɪᴍᴇ •", url=watch_url)
+                        ]
+                    ]
+                except Exception as e:
+                    await rep.report(f"Failed to get invite link for channel {specific_channel_id}: {str(e)}", "warning", log=True)
+
+            # 3. Post to main channel
+            try:
+                if photo_url and ospath.exists(photo_url):
+                    with open(photo_url, 'rb') as photo_file:
+                        main_post_msg = await bot.send_photo(
+                            Var.MAIN_CHANNEL,
+                            photo=photo_file,
+                            caption=main_caption,
+                            reply_markup=InlineKeyboardMarkup(main_btns) if main_btns else None
+                        )
+                else:
+                    main_post_msg = await bot.send_photo(
+                        Var.MAIN_CHANNEL,
+                        photo=photo_url or "https://ibb.co/5xjBCXKp",
+                        caption=main_caption,
+                        reply_markup=InlineKeyboardMarkup(main_btns) if main_btns else None
+                    )
+            except Exception as e:
+                await rep.report(f"Failed to send to main channel for {name}: {str(e)}", "error", log=True)
+                ffLock.release()
+                return
+
+            # Save the final main channel post ID under msg_id/post_id in DB
+            for qual in Var.QUALS:
+                m_id = uploaded_qual_msg_ids.get(qual)
+                if m_id:
+                    await db.save_anime(
+                        ani_id, ep_no, qual, 
+                        post_id=main_post_msg.id, 
+                        file_msg_id=m_id,
+                        spec_post_id=specific_post_msg.id if specific_post_msg else None
+                    )
+
+            # Log a single combined summary to LOG_CHANNEL
+            try:
+                source_str = "Manual Command / Sync" if force else "Auto-Sync Feed"
+                qualities_str = ", ".join(uploaded_qual_msg_ids.keys())
+                log_text = f"""<b>📥 New Video Uploaded (Multi-Quality)</b>
 <b>• Anime:</b> <code>{name}</code>
 <b>• Episode:</b> <code>{ep_no}</code>
-<b>• Quality:</b> <code>{qual}</code>
+<b>• Qualities:</b> <code>{qualities_str}</code>
 <b>• Source:</b> <code>{source_str}</code>
 <b>• Torrent Link:</b> <a href="{torrent}">Click Here</a>
-<b>• File Message ID:</b> <code>{msg_id}</code>"""
-                    await bot.send_message(chat_id=Var.LOG_CHANNEL, text=log_text, disable_web_page_preview=True)
-                except Exception as log_err:
-                    from config import LOGS
-                    LOGS.error(f"Failed to send log message to LOG_CHANNEL: {log_err}")
-            
-            # Remove final main channel update since buttons are updated incrementally
+<b>• Main Post ID:</b> <code>{main_post_msg.id}</code>"""
+                await bot.send_message(chat_id=Var.LOG_CHANNEL, text=log_text, disable_web_page_preview=True)
+            except Exception as log_err:
+                LOGS.error(f"Failed to send log message to LOG_CHANNEL: {log_err}")
+
+            # Send sticker
             sticker_id = await db.get_sticker()
             if sticker_id:
                 try:

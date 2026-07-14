@@ -15,27 +15,51 @@ class botmaker(object):
 sɪᴍᴘʟʏ ᴄʟɪᴄᴋ ᴏɴ ʟɪɴᴋ ᴀɴᴅ sᴛᴀʀᴛ ᴛʜᴇ ʙᴏᴛ, ᴊᴏɪɴ ʙᴏᴛʜ ᴄʜᴀɴɴᴇʟs ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ — ᴛʜᴀᴛ'ꜱ ɪᴛ.....!</blockquote></b>"""
 
     ABOUT_TXT = """<b><blockquote>
-◈ ᴄʀᴇᴀᴛᴏʀ: <a href="https://t.me/akaza7902">ABHI</a>
-◈ ᴀɴɪᴍᴇ ᴄʜᴀɴɴᴇʟ: <a href="https://t.me/Z5Tech_BD">ANIME IN TELUGU </a>
-◈ Oɴɢᴏɪɴɢ Eɴɢ sᴜʙ/ᴅᴜʙ: <a href="https://t.me/Z5Tech_BD">Z5Tech_BD</a>
+◈ ᴄʀᴇᴀᴛᴏʀ: <a href="https://t.me/Z5Tech_BD">ESHAN</a>
+◈ ʙᴀᴄᴋᴜᴘ ᴄʜᴀɴɴᴇʟ: <a href="{backup_link}">Crunchyroll backup</a>
+◈ Oɴɢᴏɪɴɢ Eɴɢ sᴜʙ/Hindi ᴅᴜʙ: <a href="https://t.me/crunchyroll100">Crunchyroll</a>
 </blockquote></b>"""
 
-    CMD_TXT = """<blockquote><b>» ᴀᴅᴍɪɴ ᴄᴏᴍᴍᴀɴᴅs:</b></blockquote>
+    CMD_TXT = """<b>📜 <u>MASTER ADMIN COMMAND LIST</u></b>
 
-<b>›› /dlt_time :</b> sᴇᴛ ᴀᴜᴛᴏ ᴅᴇʟᴇᴛᴇ ᴛɪᴍᴇ  
-<b>›› /check_dlt_time :</b> ᴄʜᴇᴄᴋ ᴄᴜʀʀᴇɴᴛ ᴅᴇʟᴇᴛᴇ ᴛɪᴍᴇ  
-<b>›› /dbroadcast :</b> ʙʀᴏᴀᴅᴄᴀsᴛ ᴅᴏᴄᴜᴍᴇɴᴛ / ᴠɪᴅᴇᴏ  
-<b>›› /ban :</b> ʙᴀɴ ᴀ ᴜꜱᴇʀ  
-<b>›› /unban :</b> ᴜɴʙᴀɴ ᴀ ᴜꜱᴇʀ  
-<b>›› /banlist :</b> ɢᴇᴛ ʟɪsᴛ ᴏꜰ ʙᴀɴɴᴇᴅ ᴜꜱᴇʀs  
-<b>›› /addchnl :</b> ᴀᴅᴅ ꜰᴏʀᴄᴇ sᴜʙ ᴄʜᴀɴɴᴇʟ  
-<b>›› /delchnl :</b> ʀᴇᴍᴏᴠᴇ ꜰᴏʀᴄᴇ sᴜʙ ᴄʜᴀɴɴᴇʟ  
-<b>›› /listchnl :</b> ᴠɪᴇᴡ ᴀᴅᴅᴇᴅ ᴄʜᴀɴɴᴇʟs  
-<b>›› /fsub_mode :</b> ᴛᴏɢɢʟᴇ ꜰᴏʀᴄᴇ sᴜʙ ᴍᴏᴅᴇ  
-<b>›› /pbroadcast :</b> sᴇɴᴅ ᴘʜᴏᴛᴏ ᴛᴏ ᴀʟʟ ᴜꜱᴇʀs  
-<b>›› /add_admin :</b> ᴀᴅᴅ ᴀɴ ᴀᴅᴍɪɴ  
-<b>›› /deladmin :</b> ʀᴇᴍᴏᴠᴇ ᴀɴ ᴀᴅᴍɪɴ  
-<b>›› /admins :</b> ɢᴇᴛ ʟɪsᴛ ᴏꜰ ᴀᴅᴍɪɴs
+<blockquote><b>🛑 <u>Process & Encoding Control</u></b></blockquote>
+<b>››</b> <code>/cancel_all</code> <b>:</b> Stop active encodes, clear queues & free storage  
+<b>››</b> <code>/pause</code> <b>:</b> Pause background anime fetching  
+<b>››</b> <code>/resume</code> <b>:</b> Resume background anime fetching  
+<b>››</b> <code>/restart</code> <b>:</b> Restart the bot  
+
+<blockquote><b>📥 <u>Manual Search & Sync Queue</u></b></blockquote>
+<b>››</b> <code>/qadd</code> <i>{name}</i> <b>:</b> Add anime to background sync queue  
+<b>››</b> <code>/qlist</code> <b>:</b> View pending & completed sync tasks  
+<b>››</b> <code>/qclear</code> <b>:</b> Clear pending queue tasks  
+<b>››</b> <code>/search</code> <i>{query}</i> <b>:</b> Search Nyaa/MovieBox directly  
+
+<blockquote><b>🗺 <u>Anime Channel Mapping</u></b></blockquote>
+<b>››</b> <code>/setchannel</code> <b>:</b> Interactive prompt to map anime to channel  
+<b>››</b> <code>/delchannel</code> <b>:</b> Remove anime channel mapping  
+<b>››</b> <code>/listchannels</code> <b>:</b> View all mapped anime channels  
+
+<blockquote><b>🛡 <u>Force-Sub & Security</u></b></blockquote>
+<b>››</b> <code>/addchnl</code> <b>:</b> Add force-sub channel  
+<b>››</b> <code>/delchnl</code> <b>:</b> Remove force-sub channel  
+<b>››</b> <code>/listchnl</code> <b>:</b> View force-sub channels  
+<b>››</b> <code>/fsub_mode</code> <b>:</b> Toggle force-sub mode  
+<b>››</b> <code>/dlt_time</code> <i>{sec}</i> <b>:</b> Set auto-delete timer for file downloads  
+<b>››</b> <code>/check_dlt_time</code> <b>:</b> Check current auto-delete timer  
+
+<blockquote><b>📡 <u>RSS Automation</u></b></blockquote>
+<b>››</b> <code>/add_rss</code> <b>:</b> Add custom RSS feed URL  
+<b>››</b> <code>/list_rss</code> <b>:</b> View configured RSS feeds  
+<b>››</b> <code>/remove_rss</code> <b>:</b> Remove an RSS feed  
+
+<blockquote><b>📊 <u>Analytics & Users</u></b></blockquote>
+<b>››</b> <code>/stats</code> <b>:</b> View bot uptime & system stats  
+<b>››</b> <code>/users</code> <b>:</b> Check total bot user count  
+<b>››</b> <code>/broadcast</code> <b>:</b> Broadcast text message to users  
+<b>››</b> <code>/pbroadcast</code> <b>:</b> Broadcast photo to users  
+<b>››</b> <code>/dbroadcast</code> <b>:</b> Broadcast video/doc to users  
+<b>››</b> <code>/ban</code> & <code>/unban</code> <b>:</b> Ban or unban a user  
+<b>››</b> <code>/admins</code> <b>:</b> Manage bot admin list  
 """
 
     BOT_STATS_TEXT = "<b>BOT UPTIME</b>\n{uptime}"

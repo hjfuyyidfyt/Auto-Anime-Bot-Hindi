@@ -22,7 +22,8 @@ async def change_force_sub_mode(client: Client, message: Message):
     channels = await db.show_channels()
 
     if not channels:
-        return await temp.edit("<b>❌ No force-sub channels found.</b>")
+        buttons = [[InlineKeyboardButton("Add Channel ➕", callback_data="addchnl_prompt")]]
+        return await temp.edit("<b>❌ No force-sub channels found.</b>", reply_markup=InlineKeyboardMarkup(buttons))
 
     buttons = []
     for ch_id in channels:
@@ -36,7 +37,10 @@ async def change_force_sub_mode(client: Client, message: Message):
             logger.error(f"Error fetching chat {ch_id}: {e}")
             buttons.append([InlineKeyboardButton(f"⚠️ {ch_id} (Unavailable)", callback_data=f"rfs_ch_{ch_id}")])
 
-    buttons.append([InlineKeyboardButton("Close ✖️", callback_data="close")])
+    buttons.append([
+        InlineKeyboardButton("Add Channel ➕", callback_data="addchnl_prompt"),
+        InlineKeyboardButton("Close ✖️", callback_data="close")
+    ])
 
     await temp.edit(
         "<b>⚡ Select a channel to toggle Force-Sub Mode:</b>",
@@ -170,21 +174,29 @@ async def list_force_sub_channels(client: Client, message: Message):
     channels = await db.show_channels()
 
     if not channels:
-        return await temp.edit("<b>❌ No force-sub channels found.</b>")
+        buttons = [[InlineKeyboardButton("Add Channel ➕", callback_data="addchnl_prompt")]]
+        return await temp.edit("<b>❌ No force-sub channels found.</b>", reply_markup=InlineKeyboardMarkup(buttons))
 
     result = "<b>⚡ Force-sub Channels:</b>\n\n"
+    buttons = []
     for ch_id in channels:
         try:
             chat = await client.get_chat(ch_id)
             link = chat.invite_link or await client.export_chat_invite_link(chat.id)
             result += f"<b>•</b> <a href='{link}'>{chat.title}</a> [<code>{ch_id}</code>]\n"
+            buttons.append([InlineKeyboardButton(f"❌ Remove {chat.title}", callback_data=f"delchnl_{ch_id}")])
         except Exception as e:
             logger.error(f"Error fetching chat {ch_id}: {e}")
             result += f"<b>•</b> <code>{ch_id}</code> — <i>Unavailable</i>\n"
+            buttons.append([InlineKeyboardButton(f"❌ Remove ID: {ch_id}", callback_data=f"delchnl_{ch_id}")])
 
+    buttons.append([
+        InlineKeyboardButton("Add Channel ➕", callback_data="addchnl_prompt"),
+        InlineKeyboardButton("Close ✖️", callback_data="close")
+    ])
     await temp.edit(
         result,
         disable_web_page_preview=True,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Close ✖️", callback_data="close")]])
+        reply_markup=InlineKeyboardMarkup(buttons)
     )
 

@@ -1,3 +1,4 @@
+import re
 from calendar import month_name
 from datetime import datetime
 from random import choice
@@ -11,9 +12,187 @@ from .ffencoder import ffargs
 from .func_utils import handle_logs
 from .reporter import rep
 
+async def get_prequels_of_id(ani_id: int) -> list:
+    query = """
+    query ($id: Int) {
+      Media (id: $id, type: ANIME) {
+        relations {
+          edges {
+            relationType
+            node {
+              id
+              type
+            }
+          }
+        }
+      }
+    }
+    """
+    for attempt in range(5):
+        try:
+            async with ClientSession() as sess:
+                async with sess.post("https://graphql.anilist.co", json={'query': query, 'variables': {'id': ani_id}}) as resp:
+                    if resp.status == 200:
+                        resp_json = await resp.json()
+                        media = resp_json.get('data', {}).get('Media', {}) or {}
+                        relations = media.get('relations', {}).get('edges', [])
+                        prequels = []
+                        for edge in relations:
+                            if edge.get('relationType') == 'PREQUEL':
+                                node = edge.get('node', {})
+                                if node.get('type') == 'ANIME':
+                                    prequels.append(node.get('id'))
+                        return prequels
+                    elif resp.status == 429:
+                        retry_after = int(resp.headers.get('Retry-After', 5))
+                        LOGS.warning(f"AniList Rate Limited for get_prequels_of_id({ani_id}), waiting {retry_after}s (attempt {attempt+1}/5)...")
+                        await asleep(retry_after + 1)
+                    else:
+                        await asleep(2)
+        except Exception as e:
+            LOGS.error(f"Error in get_prequels_of_id({ani_id}) attempt {attempt+1}: {e}")
+            await asleep(2)
+    return []
+
+async def get_all_related_ids(ani_id: int) -> list:
+    query = """
+    query ($id: Int) {
+      Media (id: $id, type: ANIME) {
+        relations {
+          edges {
+            relationType
+            node {
+              id
+              type
+            }
+          }
+        }
+      }
+    }
+    """
+    visited = {ani_id}
+    queue = [ani_id]
+    
+    while queue:
+        current_id = queue.pop(0)
+        for attempt in range(5):
+            try:
+                async with ClientSession() as sess:
+                    async with sess.post("https://graphql.anilist.co", json={'query': query, 'variables': {'id': current_id}}) as resp:
+                        if resp.status == 200:
+                            resp_json = await resp.json()
+                            media = resp_json.get('data', {}).get('Media', {}) or {}
+                            relations = media.get('relations', {}).get('edges', [])
+                            for edge in relations:
+                                rtype = edge.get('relationType')
+                                if rtype in ('PREQUEL', 'SEQUEL'):
+                                    node = edge.get('node', {})
+                                    if node.get('type') == 'ANIME':
+                                        nid = node.get('id')
+                                        if nid not in visited:
+                                            visited.add(nid)
+                                            queue.append(nid)
+                            break
+                        elif resp.status == 429:
+                            retry_after = int(resp.headers.get('Retry-After', 5))
+                            LOGS.warning(f"AniList Rate Limited for get_all_related_ids({current_id}), waiting {retry_after}s (attempt {attempt+1}/5)...")
+                            await asleep(retry_after + 1)
+                        else:
+                            await asleep(2)
+            except Exception as e:
+                LOGS.error(f"Error in get_all_related_ids({current_id}) attempt {attempt+1}: {e}")
+                await asleep(2)
+    return list(visited)
+
+async def get_absolute_season_by_relations(ani_id: int) -> int:
+    # 1. Try to get cached timeline from local database
+    try:
+        from bot.core.database import db
+        cached_nodes = await db.get_cached_timeline(ani_id)
+        if cached_nodes:
+            for node in cached_nodes:
+                if node.get('id') == ani_id:
+                    return node.get('absolute_season', 1)
+    except Exception as e:
+        LOGS.error(f"Error checking cached timeline for {ani_id}: {e}")
+
+    # 2. Cache miss: Fetch all related IDs bidirectionally
+    related_ids = await get_all_related_ids(ani_id)
+    
+    # 3. Fetch metadata for all nodes in the timeline
+    chain_nodes = []
+    for rid in related_ids:
+        node_media = await get_anime_by_id(rid)
+        if node_media:
+            chain_nodes.append(node_media)
+            
+    # 4. Sort nodes chronologically by release date (startDate)
+    def get_start_date_key(node):
+        sd = node.get('startDate') or {}
+        year = sd.get('year') or 9999
+        month = sd.get('month') or 12
+        day = sd.get('day') or 31
+        return (year, month, day)
+        
+    chain_nodes.sort(key=get_start_date_key)
+    
+    if not chain_nodes:
+        return 1
+        
+    # 5. Calculate absolute season values
+    season_counter = 1
+    timeline_nodes = []
+    saved_related_ids = []
+    
+    for idx, node in enumerate(chain_nodes):
+        node_id = node.get('id')
+        saved_related_ids.append(node_id)
+        
+        title = node.get('title', {}).get('english') or node.get('title', {}).get('romaji')
+        fmt = node.get('format', '')
+        
+        if idx == 0:
+            season_val = 1
+        else:
+            curr_title = (title or "").lower()
+            curr_format = (fmt or "").upper()
+            is_same_season = False
+            if curr_format in ('OVA', 'SPECIAL', 'MOVIE'):
+                is_same_season = True
+            elif 'special' in curr_title or 'ryusui' in curr_title or 'episode' in curr_title:
+                is_same_season = True
+            elif any(part in curr_title for part in ('part 2', 'part 3', 'part 4', 'cour 2', 'cour 3', 'cour 4')):
+                is_same_season = True
+            elif ('part' in curr_title or 'cour' in curr_title) and ('part 1' not in curr_title and 'cour 1' not in curr_title):
+                is_same_season = True
+                
+            if not is_same_season:
+                season_counter += 1
+            season_val = season_counter
+            
+        timeline_nodes.append({
+            'id': node_id,
+            'title': node.get('title'),
+            'format': fmt,
+            'absolute_season': season_val
+        })
+        
+    try:
+        from bot.core.database import db
+        await db.save_cached_timeline(saved_related_ids, timeline_nodes)
+        LOGS.info(f"Saved cached timeline for base ID {saved_related_ids[0]} with {len(timeline_nodes)} related IDs.")
+    except Exception as e:
+        LOGS.error(f"Error saving timeline cache for {ani_id}: {e}")
+        
+    for node in timeline_nodes:
+        if node.get('id') == ani_id:
+            return node.get('absolute_season', 1)
+    return 1
+
+
 CAPTION_FORMAT = """
 <b>◆ <i>{title}</i> ◆</b>
-<b>Season {anime_season} • Episode {ep_no}</b>
+<b>{season_info_line}</b>
 <b>━━━━━━━━━━━━━━━━━━━━━━━━</b>
 <b>⌬ Audio:</b> <i>{audio_lang} [ESub]</i>  
 <b>⌬ Status:</b> <i>{status}</i>  
@@ -204,6 +383,33 @@ class AniLister:
             ani_cache[cache_key] = {}
         return {}
 
+async def get_anime_by_id(ani_id: int):
+    cache_key = f"ani_id:{ani_id}"
+    if cache_key in ani_cache:
+        val = ani_cache[cache_key]
+        if val:
+            return val
+    for attempt in range(5):
+        try:
+            async with ClientSession() as sess:
+                async with sess.post("https://graphql.anilist.co", json={'query': ANIME_GRAPHQL_QUERY, 'variables': {'id': ani_id}}) as resp:
+                    if resp.status == 200:
+                        resp_json = await resp.json()
+                        data = resp_json.get('data', {}).get('Media', {}) or {}
+                        if data:
+                            ani_cache[cache_key] = data
+                        return data
+                    elif resp.status == 429:
+                        retry_after = int(resp.headers.get('Retry-After', 5))
+                        LOGS.warning(f"AniList Rate Limited for get_anime_by_id({ani_id}), waiting {retry_after}s (attempt {attempt+1}/5)...")
+                        await asleep(retry_after + 1)
+                    else:
+                        await asleep(2)
+        except Exception as e:
+            LOGS.error(f"Error in get_anime_by_id({ani_id}) attempt {attempt+1}: {e}")
+            await asleep(2)
+    return {}
+
     @handle_logs
     async def _parse_anilist_data(self, data):
         if not data or not data.get("data", {}).get("Media"):
@@ -283,6 +489,43 @@ class TextEditor:
             if self.adata:
                 break
         
+        if not self.adata:
+            # Try to resolve a dummy ID from name hash to support non-AniList shows (like Indian cartoons)
+            anime_title = self.pdata.get("anime_title") or self.__name
+            import hashlib
+            h = hashlib.md5(anime_title.encode()).hexdigest()
+            dummy_id = int(h[:7], 16)
+            self.adata = {
+                'id': dummy_id,
+                'title': {'english': anime_title, 'romaji': anime_title},
+                'is_dummy': True
+            }
+        if self.adata and not self.adata.get('is_dummy'):
+            parsed_season_raw = self.pdata.get("anime_season")
+            if parsed_season_raw:
+                s_str = str(parsed_season_raw[-1]) if isinstance(parsed_season_raw, list) else str(parsed_season_raw)
+                s_clean = ''.join(c for c in s_str if c.isdigit())
+                if s_clean:
+                    parsed_season = int(s_clean)
+                    absolute_season = await get_absolute_season_by_relations(self.adata.get('id'))
+                    if absolute_season != parsed_season:
+                        # Fetch the timeline doc containing all related nodes
+                        try:
+                            from bot.core.database import db
+                            timeline_doc = await db.timelines.find_one({'related_ids': self.adata.get('id')})
+                            if timeline_doc:
+                                matched_node = None
+                                for node in timeline_doc.get('timeline_nodes', []):
+                                    if node.get('absolute_season') == parsed_season:
+                                        matched_node = node
+                                        break
+                                if matched_node:
+                                    matched_data = await get_anime_by_id(matched_node.get('id'))
+                                    if matched_data:
+                                        self.adata = matched_data
+                        except Exception as e:
+                            LOGS.error(f"Error resolving season mismatch: {e}")
+        
         # Cache the result under the full release title to skip all variations in the future
         ani_cache[self.__name] = self.adata
 
@@ -297,7 +540,7 @@ class TextEditor:
                 s_str = str(anime_season[-1]) if isinstance(anime_season, list) else str(anime_season)
                 s_clean = ''.join(c for c in s_str if c.isdigit())
                 if s_clean and int(s_clean) > 1:
-                    pname += f" {s_clean}"
+                    pname += f" {int(s_clean)}"
             if not no_y and anime_year:
                 pname += f" {anime_year}"
             return pname
@@ -306,16 +549,67 @@ class TextEditor:
     @handle_logs
     async def get_poster(self):
         anime_id = self.adata.get("id")
-        if anime_id and str(anime_id).isdigit():
+        if anime_id and str(anime_id).isdigit() and not self.adata.get("is_dummy"):
             return f"https://img.anili.st/media/{anime_id}"
-        return "https://envs.sh/YsH.jpg"
+        return "https://ibb.co/5xjBCXKp"
+
+    async def get_season(self):
+        """Get season number: first try absolute season from prequel relations, then AniList title, then synonyms, then anitopy."""
+        ani_id = self.adata.get("id")
+        if ani_id and str(ani_id).isdigit() and not self.adata.get("is_dummy"):
+            try:
+                cache_key = f"abs_season:{ani_id}"
+                if cache_key in ani_cache:
+                    abs_season = ani_cache[cache_key]
+                else:
+                    abs_season = await get_absolute_season_by_relations(int(ani_id))
+                    ani_cache[cache_key] = abs_season
+                if abs_season > 1:
+                    return str(abs_season).zfill(2)
+            except Exception as e:
+                LOGS.error(f"Error calculating absolute season for ID {ani_id}: {e}")
+
+        # Fallback 1: Try to extract from AniList English or Romaji title
+        for key in ('english', 'romaji'):
+            title = (self.adata.get('title') or {}).get(key) or ''
+            m = re.search(r'(?:Season|S)\s*(\d+)', title, re.IGNORECASE)
+            if m:
+                return str(m.group(1)).zfill(2)
+
+        # Fallback 2: Try AniList synonyms for patterns like "3rd Season"
+        for syn in (self.adata.get('synonyms') or []):
+            m = re.search(r'(\d+)(?:st|nd|rd|th)\s*Season', syn, re.IGNORECASE)
+            if m:
+                return str(m.group(1)).zfill(2)
+
+        # Fallback 3: Fall back to anitopy's anime_season
+        ani_s = self.pdata.get('anime_season', '01')
+        raw = str(ani_s[-1]) if isinstance(ani_s, list) else str(ani_s)
+        digits = ''.join(c for c in raw if c.isdigit())
+        return digits.zfill(2) if digits else '01'
+
+    def _get_season(self):
+        # Synchronous fallback if needed
+        for key in ('english', 'romaji'):
+            title = (self.adata.get('title') or {}).get(key) or ''
+            m = re.search(r'(?:Season|S)\s*(\d+)', title, re.IGNORECASE)
+            if m:
+                return str(m.group(1)).zfill(2)
+        for syn in (self.adata.get('synonyms') or []):
+            m = re.search(r'(\d+)(?:st|nd|rd|th)\s*Season', syn, re.IGNORECASE)
+            if m:
+                return str(m.group(1)).zfill(2)
+        ani_s = self.pdata.get('anime_season', '01')
+        raw = str(ani_s[-1]) if isinstance(ani_s, list) else str(ani_s)
+        digits = ''.join(c for c in raw if c.isdigit())
+        return digits.zfill(2) if digits else '01'
 
     @handle_logs
     async def get_upname(self, qual=""):
         anime_name = self.pdata.get("anime_title")
         codec = 'HEVC' if 'libx265' in ffargs[qual] else 'AV1' if 'libaom-av1' in ffargs[qual] else ''
         lang = 'SUB' if 'sub' in self.__name.lower() else 'Sub'
-        anime_season = str(ani_s[-1]) if (ani_s := self.pdata.get('anime_season', '01')) and isinstance(ani_s, list) else str(ani_s)
+        anime_season = await self.get_season()
         if anime_name and self.pdata.get("episode_number"):
             titles = self.adata.get('title', {})
             return f"""[S{anime_season}-{'E'+str(self.pdata.get('episode_number')) if self.pdata.get('episode_number') else ''}] {titles.get('english') or titles.get('romaji') or titles.get('native')} {'['+qual+'p]' if qual else ''} {'['+codec.upper()+'] ' if codec else ''}{'['+lang+']'} {Var.BRAND_UNAME}.mkv"""
@@ -338,15 +632,44 @@ class TextEditor:
         titles = self.adata.get("title", {})
         
         # Determine Audio Language
-        audio_lang = "Japanese"
+        audio_lang = "Hindi"
         lower_name = self.__name.lower()
-        if "dual" in lower_name or "multi" in lower_name:
-             audio_lang = "Dual Audio"
-        elif "dub" in lower_name:
-             audio_lang = "English"
+        if "multi" in lower_name:
+            audio_lang = "Multi Audio"
+        elif "dual" in lower_name:
+            audio_lang = "Dual Audio"
+        elif "hindi" in lower_name:
+            audio_lang = "Hindi"
+        elif "english" in lower_name or "dub" in lower_name:
+            audio_lang = "English"
+        elif "japanese" in lower_name or "sub" in lower_name:
+            audio_lang = "Japanese"
+
+        # Dynamic Subtitles and Parts/Cours parsing
+        main_title = titles.get('english') or titles.get('romaji') or titles.get('native') or "N/A"
+        sub_title = ""
+        if ":" in main_title:
+            sub_title = main_title.split(":")[1].strip()
+            sub_title = re.sub(r'(?i)\b(part|cour|season)\s*\d+\b', '', sub_title).strip()
+            sub_title = re.sub(r'\s+', ' ', sub_title).strip(" -")
+            
+        part_str = ""
+        part_match = re.search(r'(?i)\b(part|cour)\s*(\d+)\b', main_title)
+        if part_match:
+            part_name = part_match.group(1).title()
+            part_num = part_match.group(2)
+            part_str = f" • {part_name} {part_num}"
+            
+        anime_season = await self.get_season()
+        ep_no = self.pdata.get("episode_number") or "N/A"
+        
+        if sub_title:
+            season_info_line = f"Season {anime_season} ({sub_title}){part_str} • Episode {ep_no}"
+        else:
+            season_info_line = f"Season {anime_season}{part_str} • Episode {ep_no}"
 
         return CAPTION_FORMAT.format(
-            title=titles.get('english') or titles.get('romaji') or titles.get('native') or "N/A",
+            title=main_title,
             form=self.adata.get("format") or "N/A",
             genres=", ".join(f"{GENRES_EMOJI[x]} #{x.replace(' ', '_').replace('-', '_')}" for x in (self.adata.get('genres') or [])),
             avg_score=f"{sc}%" if (sc := self.adata.get('averageScore')) else "N/A",
@@ -354,9 +677,8 @@ class TextEditor:
             start_date=startdate,
             end_date=enddate,
             t_eps=self.adata.get("episodes") or "N/A",
-            anime_season=str(ani_s[-1]) if (ani_s := self.pdata.get('anime_season', '01')) and isinstance(ani_s, list) else str(ani_s),
+            season_info_line=season_info_line,
             plot=(desc if (desc := self.adata.get("description") or "N/A") and len(desc) < 200 else desc[:200] + "...") if self.adata.get("description") else "N/A",
-            ep_no=self.pdata.get("episode_number") or "N/A",
             cred=Var.BRAND_UNAME,
             audio_lang=audio_lang
         )

@@ -278,7 +278,132 @@ async def qlist_command(client: Client, message: Message):
         
     await message.reply(report)
 
-@bot.on_message(filters.command("qclear") & filters.private & admin)
-async def qclear_command(client: Client, message: Message):
-    deleted_count = await db.clear_pending_queue()
-    await message.reply(f"🗑️ <b>Cleared all pending tasks!</b>\nRemoved <b>{deleted_count}</b> pending task(s) from the sync queue.")
+@bot.on_message(filters.command(["qclear", "cancel_all", "cancelall", "cancel_tasks"]) & filters.private & admin)
+async def cancel_all_tasks_command(client: Client, message: Message):
+    temp = await message.reply("⏳ <b>Cancelling all active processing, terminating encodes & clearing storage...</b>", quote=True)
+    
+    # 1. Clear DB sync queue (both pending and processing)
+    res = await db.sync_queue.delete_many({'status': {'$in': ['pending', 'processing']}})
+    deleted_count = res.deleted_count
+    
+    # 2. Empty in-memory asyncio Queue
+    from bot.core.bot_instance import ffQueue, active_priority_tasks, ffpids_cache, ani_cache
+    queue_count = 0
+    while not ffQueue.empty():
+        try:
+            ffQueue.get_nowait()
+            ffQueue.task_done()
+            queue_count += 1
+        except Exception:
+            break
+            
+    # 3. Clear active priority tasks set and pause background fetchers briefly
+    active_priority_tasks.clear()
+    
+    # 4. Kill active FFmpeg subprocesses
+    killed_pids = 0
+    if ffpids_cache:
+        import os, signal
+        for pid in list(ffpids_cache):
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed_pids += 1
+            except Exception:
+                pass
+        ffpids_cache.clear()
+        
+    # Also run system pkill ffmpeg to be 100% sure
+    try:
+        proc = await asyncio.create_subprocess_shell("pkill -9 -f ffmpeg")
+        await proc.communicate()
+    except Exception:
+        pass
+
+    # 5. Clean up temporary files in downloads and encode folders
+    import shutil, glob, os
+    freed_files = 0
+    for folder in ["downloads", "encode", "."]:
+        for ext in ["*.mkv", "*.mp4", "*.ts", "*.tmp", "prog.txt", "ffmpeg_err.txt"]:
+            for fpath in glob.glob(os.path.join(folder, ext)):
+                try:
+                    os.remove(fpath)
+                    freed_files += 1
+                except Exception:
+                    pass
+
+    # 6. Fetch disk storage information
+    total, used, free = shutil.disk_usage("/")
+    from bot.core.func_utils import convertBytes
+    
+    await temp.edit(
+        f"🛑 <b>All processing & pending tasks stopped!</b>\n\n"
+        f"• <b>DB Tasks Cleared:</b> {deleted_count}\n"
+        f"• <b>Queue Items Removed:</b> {queue_count}\n"
+        f"• <b>Active Encodes Terminated:</b> {killed_pids}\n"
+        f"• <b>Temp Files Cleaned:</b> {freed_files}\n\n"
+        f"📊 <b>System Storage & Network Status:</b>\n"
+        f"• <b>Disk Free:</b> {convertBytes(free)} / {convertBytes(total)} ({round((free/total)*100, 1)}% free)\n"
+        f"• <b>Disk Used:</b> {convertBytes(used)}\n"
+        f"• <b>Network Status:</b> Idle (All background downloads stopped)"
+    )
+
+@bot.on_message(filters.command("sync_mb") & filters.private & admin)
+async def manual_sync_moviebox(client: Client, message: Message):
+    if len(message.command) < 2 or "|" not in message.text:
+        return await message.reply("<b>Usage:</b> <code>/sync_mb Anime Name | Season</code>\n\n<b>Example:</b> <code>/sync_mb Dr. STONE: STONE WARS | 2</code>")
+        
+    parts = message.text.split("|")
+    anime_title = parts[0].replace("/sync_mb", "").strip()
+    try:
+        season = int(parts[1].strip())
+    except ValueError:
+        return await message.reply("❌ Invalid season number.")
+        
+    msg = await message.reply(f"<i>Manual MovieBox Sync triggered for: {anime_title} Season {season}...</i>")
+    asyncio.create_task(run_moviebox_sync(anime_title, season, msg))
+
+async def run_moviebox_sync(anime_title, season, msg):
+    from bot.core.fallback_downloader import MovieBoxFallback
+    from bot.core.text_utils import TextEditor
+    from bot.core.auto_animes import get_animes
+    from bot.core.reporter import rep
+    
+    # 1. Resolve anime using TextEditor to load Anilist data
+    mock_title = f"{anime_title} - S{season:02d}E01 [Hindi]"
+    ani_info = TextEditor(mock_title)
+    await ani_info.load_anilist()
+    ani_id = ani_info.adata.get('id')
+    if not ani_id:
+        await msg.edit(f"❌ Failed to resolve AniList ID for: <code>{anime_title}</code>")
+        return
+        
+    # 2. Search MovieBox for the subject ID
+    fallback = MovieBoxFallback("./downloads")
+    result = await fallback.search_hindi(anime_title)
+    if not result:
+        await msg.edit(f"❌ No Hindi version found on MovieBox for: <code>{anime_title}</code>")
+        return
+        
+    subject_id = result["subjectId"]
+    await msg.edit(f"🔍 Found MovieBox title: <code>{result['title']}</code> (ID: {subject_id})\nStarting sync of episodes...")
+    
+    success_count = 0
+    # Loop to download episodes
+    for ep in range(1, 100):
+        # We check if this episode url exists in MovieBox
+        ep_info = await fallback.get_episode_url(subject_id, season, ep, ani_id=ani_id)
+        if not ep_info:
+            # We reached the end of available episodes
+            break
+            
+        # Trigger get_animes with a mock title so the bot processes it fully
+        ep_name = f"{anime_title} - S{season:02d}E{ep:02d} [Hindi]"
+        await msg.edit(f"⏳ Processing: <code>{ep_name}</code> (Episode {ep})...")
+        try:
+            # We call get_animes which will fail the torrent and fallback to moviebox download
+            await get_animes(ep_name, "dummy_magnet_for_moviebox_trigger", force=True, is_priority=True)
+            success_count += 1
+        except Exception as e:
+            await rep.report(f"Failed to sync ep {ep}: {e}", "error", log=True)
+            
+    await msg.edit(f"✅ <b>Sync Completed!</b>\n\n• <b>Anime:</b> <code>{anime_title}</code>\n• <b>Season:</b> {season}\n• <b>Episodes Mapped:</b> {success_count}")

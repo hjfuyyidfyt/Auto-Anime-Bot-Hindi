@@ -57,24 +57,9 @@ async def not_joined(client: Client, message: Message):
                         data = await client.get_chat(chat_id)
                         chat_data_cache[chat_id] = data
 
-                    name = data.title
-
-                    if mode == "on" and not data.username:
-                        invite = await client.create_chat_invite_link(
-                            chat_id=chat_id,
-                            creates_join_request=True,
-                            expire_date=datetime.utcnow() + timedelta(seconds=Var.FSUB_LINK_EXPIRY) if Var.FSUB_LINK_EXPIRY else None
-                        )
-                        link = invite.invite_link
-                    else:
-                        if data.username:
-                            link = f"https://t.me/{data.username}"
-                        else:
-                            invite = await client.create_chat_invite_link(
-                                chat_id=chat_id,
-                                expire_date=datetime.utcnow() + timedelta(seconds=Var.FSUB_LINK_EXPIRY) if Var.FSUB_LINK_EXPIRY else None
-                            )
-                            link= invite.invite_link
+                    custom_title = await db.get_channel_title(chat_id)
+                    name = custom_title if custom_title else data.title
+                    link = await get_fsub_link(client, chat_id)
 
                     buttons.append([InlineKeyboardButton(text=name, url=link)])
                     count += 1
@@ -144,7 +129,7 @@ async def start_msg(client: Client, message: Message):
         await temp.delete()
         reply_markup = InlineKeyboardMarkup(
             [
-                [InlineKeyboardButton("•⚡️ ᴍᴀɪɴ ʜᴜʙ •", url=Var.MHCHANNEL_URL)],
+                [InlineKeyboardButton("•⚡️ ᴍᴀɪɴ ʜᴜʙ •", url="https://t.me/crunchyroll100")],
                 [
                     InlineKeyboardButton("• ᴀʙᴏᴜᴛ", callback_data="about"),
                     InlineKeyboardButton('ʜᴇʟᴘ •', callback_data="help")
@@ -167,6 +152,73 @@ async def start_msg(client: Client, message: Message):
 
     # Deep-link handling
     try:
+        # Check if this is a season batch parameter
+        if len(txtargs) > 1 and txtargs[1].startswith("batch_"):
+            try:
+                parts = txtargs[1].split("_")
+                if len(parts) == 4:
+                    ani_id = int(parts[1])
+                    season_no = int(parts[2])
+                    qual = parts[3]
+                    
+                    episodes_dict = await db.get_anime(ani_id)
+                    if not episodes_dict:
+                        return await editMessage(temp, "<b>❌ No files found for this anime in database!</b>")
+                    
+                    sorted_ep_keys = sorted(episodes_dict.keys(), key=lambda x: float(x))
+                    msg_ids_to_send = []
+                    for ep_str in sorted_ep_keys:
+                        m_id = episodes_dict[ep_str].get('ids', {}).get(qual)
+                        if m_id:
+                            msg_ids_to_send.append(int(m_id))
+                    
+                    if not msg_ids_to_send:
+                        return await editMessage(temp, f"<b>❌ No {qual}p files found for Season {season_no}!</b>")
+                    
+                    botmaker_msgs = []
+                    await editMessage(temp, f"📥 <b>Preparing batch delivery for {len(msg_ids_to_send)} episodes...</b>")
+                    for fid in msg_ids_to_send:
+                        msg = await client.get_messages(Var.FILE_STORE, message_ids=fid)
+                        if not msg or msg.empty:
+                            continue
+                        caption = (botmaker.CUSTOM_CAPTION.format(filename=msg.document.file_name) if bool(botmaker.CUSTOM_CAPTION) and bool(msg.document)
+                                   else ("" if not msg.caption else msg.caption.html))
+                        reply_markup = msg.reply_markup if not Var.DISABLE_CHANNEL_BUTTON else None
+                        nmsg = await msg.copy(
+                            message.chat.id,
+                            caption=caption,
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=reply_markup,
+                            protect_content=Var.PROTECT_CONTENT
+                        )
+                        botmaker_msgs.append(nmsg)
+                        await asyncio.sleep(0.5) # prevent spam limits
+                    
+                    await temp.delete()
+                    
+                    # Auto delete batch files
+                    Var.FILE_AUTO_DELETE = await db.get_del_timer()
+                    if Var.FILE_AUTO_DELETE > 0:
+                        notification_msg = await message.reply(
+                            f"<b>Tʜᴇsᴇ Fɪʟᴇs ᴡɪʟʟ ʙᴇ Dᴇʟᴇᴛᴇᴅ ɪɴ {get_exp_time(Var.FILE_AUTO_DELETE)}. Pʟᴇᴀsᴇ sᴀᴠᴇ ᴏʀ ғᴏʀᴡᴀʀᴅ ᴛʜᴇᴍ ᴛᴏ ʏᴏᴜʀ sᴀᴠᴇᴅ ᴍᴇssᴀɢᴇs ʙᴇғᴏʀᴇ ᴛʜᴇʏ ɢᴇᴛ Dᴇʟᴇᴛᴇᴅ.</b>"
+                        )
+                        await asyncio.sleep(Var.FILE_AUTO_DELETE)
+                        for nmsg in botmaker_msgs:
+                            try:
+                                await nmsg.delete()
+                            except Exception:
+                                pass
+                        try:
+                            await notification_msg.edit(
+                                "<b><u>Pʀᴇᴠɪᴏᴜs Bᴀᴛᴄʜ Mᴇssᴀɢᴇs ᴡᴇʀᴇ Dᴇʟᴇᴛᴇᴅ 🗑</u></b>"
+                            )
+                        except Exception:
+                            pass
+                    return
+            except Exception as batch_err:
+                logger.error(f"Error delivering season batch: {batch_err}")
+                return await editMessage(temp, f"<b>❌ Error delivering batch:</b> {batch_err}")
+
         base64_string = txtargs[1]
         arg = (await decode(base64_string)).split('-')
         botmaker_msgs = []
@@ -341,7 +393,7 @@ async def add_task(client, message):
     ani_task = bot_loop.create_task(get_animes(taskInfo.title, taskInfo.link, True))
     await sendMessage(message, f"<i><b>Task Added Successfully!</b></i>\n\n    • <b>Task Name :</b> {taskInfo.title}\n    • <b>Task Link :</b> {args[1]}")
 
-@bot.on_message(filters.command('commands') & filters.private & admin)  # Ensure admin filter is defined
+@bot.on_message(filters.command(['commands', 'cmds', 'admin_help', 'allcommands', 'help_admin']) & filters.private & admin)
 async def bcmd(client: Client, message: Message):        
     reply_markup = InlineKeyboardMarkup([[InlineKeyboardButton("• ᴄʟᴏsᴇ •", callback_data="close")]])
     await message.reply(text=botmaker.CMD_TXT, reply_markup=reply_markup, quote=True)

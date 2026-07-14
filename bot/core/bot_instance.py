@@ -52,6 +52,8 @@ try:
         parse_mode=ParseMode.HTML,
        
     )
+    bot.uptime = datetime.now()
+    bot.user_states = {}
     bot_loop = bot.loop
     sch = AsyncIOScheduler(timezone="Asia/Kolkata", event_loop=bot_loop)
 
